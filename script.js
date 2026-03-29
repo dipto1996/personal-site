@@ -1,3 +1,6 @@
+import { initTradeGraph } from "./apps/tradegraph/ui/tradegraph.js";
+import { mountTenderRadar } from "./apps/tenderradar/index.js";
+
 const projects = [
   {
     name: "Settle AI",
@@ -110,43 +113,43 @@ const ideas = [
 
 const dashboards = [
   {
-    label: "Planned dashboard",
-    title: "Operations Dashboard",
+    label: "Live module signal",
+    title: "Fit-ranked procurement stream",
     description:
-      "A calm control surface for workflow status, case movement, and operational exceptions without turning the UI into a wall of noise.",
+      "TenderRadar ranks opportunities by likely bid fit so SMEs spend time on plausible bids instead of portal noise.",
   },
   {
-    label: "Planned dashboard",
-    title: "Executive Dashboard",
+    label: "Live module signal",
+    title: "Qualification gap visibility",
     description:
-      "A higher-level view of throughput, risk, and business signals designed for fast scanning and fast decisions.",
+      "Turnover thresholds, credentials, and urgency are surfaced quickly so bid/no-bid decisions are faster and clearer.",
   },
   {
-    label: "Planned dashboard",
-    title: "Workflow Intelligence",
+    label: "Live module signal",
+    title: "Buyer and sector mix",
     description:
-      "A decision layer for bottlenecks, anomaly flags, and intervention timing across dense process-heavy work.",
+      "The dashboard keeps one eye on the single tender and one eye on the market pattern building around the profile.",
   },
 ];
 
 const solutions = [
   {
-    label: "Planned solution",
-    title: "Compliance Intelligence",
+    label: "Live now",
+    title: "VerifySME",
     description:
-      "Product surfaces that make regulated, document-heavy workflows more usable without sacrificing trust.",
+      "Buyer-side supplier verification and comparison using public trust signals, evidence depth, and readiness scoring.",
   },
   {
-    label: "Planned solution",
-    title: "Decision Infrastructure",
+    label: "Live now",
+    title: "TenderRadar",
     description:
-      "Systems that combine analytics, product logic, and operator judgment where business stakes are real.",
+      "Tender discovery and qualification on top of the same company graph so relevant bids surface without manual portal hopping.",
   },
   {
-    label: "Planned solution",
-    title: "Workflow Automation",
+    label: "Queued next",
+    title: "ExportPulse",
     description:
-      "Automation layers that reduce manual coordination while keeping the human decision-maker in control.",
+      "Export opportunity and readiness intelligence built on the same supplier identity, compliance, and capability layer.",
   },
 ];
 
@@ -158,6 +161,17 @@ const solutionGrid = document.querySelector("[data-solution-grid]");
 const yearNode = document.querySelector("[data-year]");
 const heroCanvas = document.querySelector("[data-hero-canvas]");
 const heroSection = document.querySelector(".hero");
+const tenderRadarRoot = document.querySelector("[data-tenderradar-app]");
+const currentPage = document.body.dataset.page;
+
+if (currentPage) {
+  document.querySelectorAll("[data-page-target]").forEach((link) => {
+    if (link.dataset.pageTarget === currentPage) {
+      link.classList.add("is-current");
+      link.setAttribute("aria-current", "page");
+    }
+  });
+}
 
 if (projectGrid) {
   projectGrid.innerHTML = projects
@@ -545,3 +559,5 @@ function setupHeroSignalField() {
 }
 
 setupHeroSignalField();
+mountTenderRadar(tenderRadarRoot);
+initTradeGraph();

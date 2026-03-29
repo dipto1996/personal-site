@@ -20,16 +20,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="page-orbit page-orbit-left"></div>
-    <div class="page-orbit page-orbit-right"></div>
-
     <div class="site-shell">
       <header class="topbar">
         <a class="brand" href="#top">Diptopal Roy</a>
@@ -47,18 +44,15 @@
         <section class="hero">
           <div class="hero-copy">
             <p class="eyebrow">AI + data science + product + founder execution</p>
-            <h1>AI products for domains where trust matters.</h1>
+            <h1>AI systems for decisions that cannot afford bluffing.</h1>
             <p class="hero-statement">
               I'm Diptopal Roy, a data scientist turned product builder and
-              founder/operator working at the intersection of AI, compliance,
-              and financial decision systems.
-            </p>
-            <p class="hero-story">
-              IIT Guwahati / American Express / Cornell Tech / Settle AI
+              founder/operator working where compliance, analytics, and product
+              judgment all have to hold at the same time.
             </p>
             <p class="lede">
-              The through-line is simple: build systems that can survive
-              ambiguity, earn trust fast, and still make business sense.
+              The through-line is simple: take dense, high-stakes workflows and
+              make them usable, reliable, and commercially legible.
             </p>
             <div class="hero-actions">
               <a class="button button-primary" href="#work">View selected work</a>
@@ -75,49 +69,70 @@
             </div>
           </div>
 
-          <div class="hero-stage" aria-label="Animated signal field">
-            <div class="hero-visual-frame" data-hero-stage>
+          <div class="hero-visual">
+            <div class="hero-visual-head">
+              <p class="eyebrow">Live Signal Field</p>
+              <p class="hero-visual-copy">
+                A contained motion system inspired by the environments I like
+                building for: dense inputs, moving dependencies, and no room
+                for bluffing.
+              </p>
+            </div>
+
+            <div class="hero-stage" data-hero-stage>
               <canvas class="hero-canvas" data-hero-canvas></canvas>
-              <div class="hero-visual-grid"></div>
-              <div class="hero-beam hero-beam-a"></div>
-              <div class="hero-beam hero-beam-b"></div>
-              <div class="hero-ring hero-ring-a"></div>
-              <div class="hero-ring hero-ring-b"></div>
-              <div class="hero-ring hero-ring-c"></div>
+              <div class="hero-stage-grid"></div>
+              <div class="hero-stage-glow"></div>
 
-              <div class="signal-chip signal-chip-a" data-depth="0.18">Trust</div>
-              <div class="signal-chip signal-chip-b" data-depth="0.26">AI systems</div>
-              <div class="signal-chip signal-chip-c" data-depth="0.14">Compliance</div>
-              <div class="signal-chip signal-chip-d" data-depth="0.22">Execution</div>
-              <div class="signal-chip signal-chip-e" data-depth="0.12">Decision logic</div>
-
-              <div class="stage-core" data-depth="0.08">
-                <span class="stage-core-label">Live operating model</span>
-                <strong>Trust Engine</strong>
-                <p>Signals, constraints, and product judgment moving together.</p>
+              <div class="hero-stage-card hero-stage-card-top">
+                <span>Current build</span>
+                <strong>Settle AI</strong>
+                <p>Compliance intelligence for immigration workflows.</p>
               </div>
 
-              <div class="stage-metric stage-metric-a" data-depth="0.16">
-                <span class="stage-metric-label">Mode</span>
-                <strong>Systems</strong>
-              </div>
-              <div class="stage-metric stage-metric-b" data-depth="0.12">
-                <span class="stage-metric-label">Bias</span>
-                <strong>Operator</strong>
-              </div>
-              <div class="stage-metric stage-metric-c" data-depth="0.2">
-                <span class="stage-metric-label">Domain</span>
-                <strong>High trust</strong>
+              <div class="hero-stage-card hero-stage-card-bottom">
+                <div class="stage-metric">
+                  <span>Edge</span>
+                  <strong>Data + product + operator bias</strong>
+                </div>
+                <div class="stage-metric">
+                  <span>Best fit</span>
+                  <strong>High-trust AI systems</strong>
+                </div>
               </div>
             </div>
+          </div>
+
+          <div class="hero-proof">
+            <article class="proof-item">
+              <span>Trajectory</span>
+              <p>
+                IIT Guwahati to American Express to Cornell Tech to founder
+                execution at Settle AI.
+              </p>
+            </article>
+            <article class="proof-item">
+              <span>Operating style</span>
+              <p>
+                Technical depth translated into product judgment, narrative
+                clarity, and execution speed.
+              </p>
+            </article>
+            <article class="proof-item">
+              <span>Focus</span>
+              <p>
+                AI, compliance, analytics, and decision systems with real
+                business stakes.
+              </p>
+            </article>
           </div>
         </section>
 
         <section class="credibility-strip" aria-label="Credibility strip">
+          <span>Settle AI</span>
+          <span>American Express</span>
           <span>Cornell Tech</span>
           <span>IIT Guwahati</span>
-          <span>American Express</span>
-          <span>Settle AI</span>
         </section>
 
         <section class="about section" id="about">
@@ -125,10 +140,11 @@
             <div class="section-heading">
               <p class="eyebrow">About</p>
               <h2>
-                I work best where the problem is messy, the domain is dense, and
-                trust is non-negotiable.
+                I work best where the domain is dense, the workflow is messy,
+                and trust has to be designed into the product.
               </h2>
             </div>
+
             <div class="about-stack">
               <div class="about-grid">
                 <p>
@@ -144,10 +160,24 @@
                   actually need.
                 </p>
               </div>
+
+              <div class="about-note">
+                <p class="about-note-label">What I bring</p>
+                <p class="about-note-copy">
+                  Serious AI work is usually a systems problem disguised as a
+                  model problem. My best work sits in that gap.
+                </p>
+              </div>
+
               <ul class="strength-list">
                 <li>Design AI workflows that can survive real-world ambiguity.</li>
-                <li>Translate between technical systems, product choices, and business stakes.</li>
-                <li>Build narrative clarity without flattening technical depth.</li>
+                <li>
+                  Translate between technical systems, product choices, and
+                  business stakes.
+                </li>
+                <li>
+                  Build narrative clarity without flattening technical depth.
+                </li>
               </ul>
             </div>
           </div>
@@ -157,11 +187,11 @@
           <div class="section-shell">
             <div class="section-heading">
               <p class="eyebrow">Selected Work</p>
-              <h2>The site gets serious when the work does.</h2>
+              <h2>Work that makes the profile credible.</h2>
               <p class="section-intro">
-                Three buckets define the current profile: AI systems for
-                compliance, analytics at scale, and thought leadership that
-                makes the operating logic visible.
+                The portfolio is strongest when it stays focused on three
+                things: AI systems for compliance, analytics that shape real
+                decisions, and writing that makes the operating logic visible.
               </p>
             </div>
             <div class="project-grid" data-project-grid></div>
@@ -172,7 +202,7 @@
           <div class="section-shell section-shell-split">
             <div class="section-heading">
               <p class="eyebrow">Experience</p>
-              <h2>Compressed, not diluted.</h2>
+              <h2>A clear line from quantitative rigor to founder execution.</h2>
             </div>
             <div class="experience-list" data-experience-list></div>
           </div>
@@ -182,10 +212,10 @@
           <div class="section-shell section-shell-split">
             <div class="section-heading">
               <p class="eyebrow">Writing & Ideas</p>
-              <h2>Credibility compounds when the reasoning is public.</h2>
+              <h2>Writing is where the thinking becomes inspectable.</h2>
               <p class="section-intro">
                 This should become the authority layer of the site: essays,
-                case studies, and product notes that show how the thinking
+                case studies, and product notes that show how the reasoning
                 actually works.
               </p>
             </div>
@@ -197,11 +227,11 @@
           <div class="contact-band">
             <div class="contact-copy">
               <p class="eyebrow">Contact</p>
-              <h2>Open a serious conversation.</h2>
+              <h2>If the problem is high-trust AI, dense workflows, or product strategy, let's talk.</h2>
               <p>
-                If you're hiring, building, investing, or exploring a high-trust
-                AI product and want someone who can operate across data,
-                product, and execution, reach out.
+                If you're hiring, building, investing, or exploring a
+                compliance-heavy AI product and want someone who can operate
+                across data, product, and execution, reach out.
               </p>
             </div>
             <div class="contact-panel">
@@ -216,7 +246,7 @@
                 >github.com/dipto1996</a
               >
               <p class="contact-note">
-                Next layer: resume, LinkedIn, and deep case study pages.
+                Next layer: resume, LinkedIn, and one deep Settle case study.
               </p>
             </div>
           </div>

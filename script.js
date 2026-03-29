@@ -8,7 +8,8 @@ const projects = [
       "High-stakes workflows break quickly when AI is treated like a generic chat surface.",
     built:
       "Product framing, retrieval-aware workflows, system design, and the operating model around how the product should behave under ambiguity.",
-    impact: "Sets the founder narrative: serious AI for regulated work, not just AI theater.",
+    impact:
+      "Turns the founder narrative into something concrete: serious AI for regulated work, not just AI theater.",
     repoUrl: "https://github.com/dipto1996/settle-demo",
     liveUrl: "https://settle-demo.vercel.app",
     tags: ["AI workflows", "RAG", "Compliance", "System design"],
@@ -19,10 +20,11 @@ const projects = [
     summary:
       "A scaled decision environment where retention modeling, experimentation, and commercial analytics have to move real business decisions.",
     problem:
-      "Analytics only matter when they change decisions, not just dashboards and slide decks.",
+      "Analytics only matter when they change decisions, not when they stay trapped in dashboards and slide decks.",
     built:
       "Retention models, experimentation work, and commercial analytics shaped for a high-stakes financial context.",
-    impact: "Built rigor around decision systems at scale before moving into founder execution.",
+    impact:
+      "Built rigor around decision systems at scale before moving into founder execution.",
     repoUrl: "",
     liveUrl: "",
     tags: ["Retention models", "Experimentation", "Commercial analytics", "Decision systems"],
@@ -36,7 +38,8 @@ const projects = [
       "Cross-functional profiles are hard to read unless the thinking is made explicit.",
     built:
       "The structure for case studies, technical notes, and essays that show how the operating logic works.",
-    impact: "Creates the authority layer that turns a portfolio into a narrative asset.",
+    impact:
+      "Creates the authority layer that turns a portfolio into a narrative asset.",
     repoUrl: "https://github.com/dipto1996",
     liveUrl: "",
     tags: ["Writing", "Research", "Strategy", "Founder narrative"],
@@ -115,8 +118,8 @@ const heroStage = document.querySelector("[data-hero-stage]");
 if (projectGrid) {
   projectGrid.innerHTML = projects
     .map(
-      (project) => `
-        <article class="project-card">
+      (project, index) => `
+        <article class="project-card ${index === 0 ? "project-card--feature" : ""}">
           <div class="project-heading">
             <div class="project-meta">
               <span class="project-type">${project.type}</span>
@@ -204,7 +207,6 @@ function setupHeroSignalField() {
     return;
   }
 
-  const depthNodes = heroStage.querySelectorAll("[data-depth]");
   const pointer = {
     currentX: 0.5,
     currentY: 0.5,
@@ -217,21 +219,22 @@ function setupHeroSignalField() {
   let height = 0;
   let animationFrame = null;
 
-  const particles = Array.from({ length: 38 }, (_, index) => ({
-    orbit: index % 3,
-    angle: Math.random() * Math.PI * 2,
-    speed: 0.002 + Math.random() * 0.0018 + (index % 3) * 0.0009,
-    radius: 0.18 + (index % 3) * 0.11 + Math.random() * 0.04,
-    size: 1.6 + Math.random() * 2.6,
-    drift: Math.random() * Math.PI * 2,
-    hue: index % 2 === 0 ? 28 : 215,
+  const nodes = Array.from({ length: 18 }, (_, index) => ({
+    baseX: 0.24 + Math.random() * 0.54,
+    baseY: 0.2 + Math.random() * 0.56,
+    driftX: (Math.random() - 0.5) * 0.05,
+    driftY: (Math.random() - 0.5) * 0.05,
+    phase: Math.random() * Math.PI * 2,
+    speed: 0.00045 + Math.random() * 0.00035,
+    size: 2 + Math.random() * 2.4,
+    warm: index % 2 === 0,
   }));
 
-  const pulseNodes = [
-    { x: 0.22, y: 0.34, phase: 0.3 },
-    { x: 0.74, y: 0.22, phase: 1.1 },
-    { x: 0.8, y: 0.68, phase: 2.1 },
-    { x: 0.32, y: 0.78, phase: 2.8 },
+  const tracks = [
+    { base: 0.23, amp: 0.08, freq: 1.3, speed: 0.00019, warm: true },
+    { base: 0.39, amp: 0.11, freq: 1.05, speed: 0.00014, warm: false },
+    { base: 0.56, amp: 0.09, freq: 1.18, speed: 0.00016, warm: true },
+    { base: 0.74, amp: 0.1, freq: 0.92, speed: 0.00013, warm: false },
   ];
 
   const resizeCanvas = () => {
@@ -245,59 +248,124 @@ function setupHeroSignalField() {
   const updatePointer = () => {
     pointer.currentX += (pointer.targetX - pointer.currentX) * 0.08;
     pointer.currentY += (pointer.targetY - pointer.currentY) * 0.08;
-
-    depthNodes.forEach((node) => {
-      const depth = Number(node.dataset.depth) || 0;
-      const moveX = (pointer.currentX - 0.5) * 48 * depth;
-      const moveY = (pointer.currentY - 0.5) * 48 * depth;
-      node.style.transform = `translate3d(${moveX}px, ${moveY}px, 0)`;
-    });
   };
 
-  const render = (time) => {
+  const trackY = (track, progress, time) => {
+    const phaseA = progress * Math.PI * 2 * track.freq + time * track.speed;
+    const phaseB = progress * Math.PI * 2 * (track.freq * 0.56) + time * track.speed * 0.68;
+    const pointerOffset = (pointer.currentY - 0.5) * height * 0.08;
+
+    return (
+      height * track.base +
+      Math.sin(phaseA) * height * track.amp +
+      Math.cos(phaseB) * height * track.amp * 0.42 +
+      pointerOffset
+    );
+  };
+
+  const nodePosition = (node, time) => {
+    const drift = Math.sin(time * node.speed + node.phase);
+    const driftSecondary = Math.cos(time * node.speed * 0.82 + node.phase);
+
+    return {
+      x:
+        width *
+        (node.baseX + node.driftX * drift + (pointer.currentX - 0.5) * 0.04),
+      y:
+        height *
+        (node.baseY + node.driftY * driftSecondary + (pointer.currentY - 0.5) * 0.05),
+      size: node.size,
+      warm: node.warm,
+    };
+  };
+
+  const render = (timestamp) => {
+    const time = timestamp;
     updatePointer();
     context.clearRect(0, 0, width, height);
 
-    const centerX = width * (0.5 + (pointer.currentX - 0.5) * 0.12);
-    const centerY = height * (0.5 + (pointer.currentY - 0.5) * 0.1);
-    const maxRadius = Math.min(width, height) * 0.46;
+    const glowCenterX = width * (0.58 + (pointer.currentX - 0.5) * 0.12);
+    const glowCenterY = height * (0.48 + (pointer.currentY - 0.5) * 0.1);
+    const glowRadius = Math.min(width, height) * 0.65;
+    const ambientGlow = context.createRadialGradient(
+      glowCenterX,
+      glowCenterY,
+      0,
+      glowCenterX,
+      glowCenterY,
+      glowRadius,
+    );
 
-    const glow = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, maxRadius);
-    glow.addColorStop(0, "rgba(255, 185, 115, 0.24)");
-    glow.addColorStop(0.45, "rgba(90, 145, 255, 0.12)");
-    glow.addColorStop(1, "rgba(0, 0, 0, 0)");
-    context.fillStyle = glow;
+    ambientGlow.addColorStop(0, "rgba(101, 132, 229, 0.16)");
+    ambientGlow.addColorStop(0.48, "rgba(209, 145, 89, 0.08)");
+    ambientGlow.addColorStop(1, "rgba(0, 0, 0, 0)");
+
+    context.fillStyle = ambientGlow;
     context.fillRect(0, 0, width, height);
 
-    [0.22, 0.34, 0.46].forEach((ratio, index) => {
-      const radius = maxRadius * ratio * 2.15;
+    const sweepProgress = ((time * 0.00008) % 1 + 1) % 1;
+    const sweepX = sweepProgress * width;
+    const sweep = context.createLinearGradient(sweepX - 120, 0, sweepX + 120, 0);
+    sweep.addColorStop(0, "rgba(255, 255, 255, 0)");
+    sweep.addColorStop(0.5, "rgba(255, 255, 255, 0.045)");
+    sweep.addColorStop(1, "rgba(255, 255, 255, 0)");
+    context.fillStyle = sweep;
+    context.fillRect(0, 0, width, height);
 
-      context.save();
-      context.translate(centerX, centerY);
-      context.rotate(time * 0.00008 * (index + 1));
-      context.strokeStyle = `rgba(255, 255, 255, ${0.06 + index * 0.02})`;
-      context.lineWidth = 1;
-      context.setLineDash([12 + index * 8, 16 + index * 12]);
-      context.lineDashOffset = -time * 0.02 * (index + 1);
+    tracks.forEach((track, trackIndex) => {
+      const gradient = context.createLinearGradient(0, 0, width, height * track.base);
+      const warmColorA = "rgba(228, 162, 108, 0.16)";
+      const warmColorB = "rgba(255, 207, 168, 0.26)";
+      const coolColorA = "rgba(108, 138, 228, 0.14)";
+      const coolColorB = "rgba(181, 204, 255, 0.18)";
+
+      gradient.addColorStop(0, track.warm ? warmColorA : coolColorA);
+      gradient.addColorStop(0.5, track.warm ? warmColorB : coolColorB);
+      gradient.addColorStop(1, track.warm ? warmColorA : coolColorA);
+
+      context.strokeStyle = gradient;
+      context.lineWidth = 1.2 + trackIndex * 0.25;
       context.beginPath();
-      context.arc(0, 0, radius, 0, Math.PI * 2);
+
+      for (let step = 0; step <= 72; step += 1) {
+        const progress = step / 72;
+        const x = progress * width;
+        const y = trackY(track, progress, time);
+
+        if (step === 0) {
+          context.moveTo(x, y);
+        } else {
+          context.lineTo(x, y);
+        }
+      }
+
       context.stroke();
-      context.restore();
+
+      for (let pulseIndex = 0; pulseIndex < 4; pulseIndex += 1) {
+        const progress = ((time * track.speed * 0.06 + pulseIndex / 4 + trackIndex * 0.11) % 1 + 1) % 1;
+        const x = progress * width;
+        const y = trackY(track, progress, time);
+        const pulseGlow = context.createRadialGradient(x, y, 0, x, y, 20);
+
+        pulseGlow.addColorStop(
+          0,
+          track.warm ? "rgba(255, 222, 190, 0.92)" : "rgba(214, 228, 255, 0.9)",
+        );
+        pulseGlow.addColorStop(1, "rgba(255, 255, 255, 0)");
+
+        context.fillStyle = pulseGlow;
+        context.beginPath();
+        context.arc(x, y, 20, 0, Math.PI * 2);
+        context.fill();
+
+        context.fillStyle = track.warm ? "rgba(255, 233, 210, 1)" : "rgba(227, 236, 255, 1)";
+        context.beginPath();
+        context.arc(x, y, 2.3, 0, Math.PI * 2);
+        context.fill();
+      }
     });
 
-    const positions = particles.map((particle) => {
-      const orbitRadius = maxRadius * (particle.radius + 0.02 * Math.sin(time * 0.0011 + particle.drift));
-      const ellipseX = orbitRadius * (particle.orbit === 1 ? 1.24 : 1.02);
-      const ellipseY = orbitRadius * (particle.orbit === 2 ? 0.72 : 0.92);
-      const angle = particle.angle + time * particle.speed;
-
-      return {
-        x: centerX + Math.cos(angle) * ellipseX,
-        y: centerY + Math.sin(angle) * ellipseY,
-        size: particle.size,
-        hue: particle.hue,
-      };
-    });
+    const positions = nodes.map((node) => nodePosition(node, time));
 
     for (let index = 0; index < positions.length; index += 1) {
       const point = positions[index];
@@ -308,9 +376,12 @@ function setupHeroSignalField() {
         const deltaY = point.y - candidate.y;
         const distance = Math.hypot(deltaX, deltaY);
 
-        if (distance < 108) {
-          context.strokeStyle = `rgba(255, 210, 170, ${0.15 - distance / 900})`;
-          context.lineWidth = 0.9;
+        if (distance < 132) {
+          context.strokeStyle =
+            point.warm || candidate.warm
+              ? `rgba(228, 162, 108, ${0.14 - distance / 1400})`
+              : `rgba(108, 138, 228, ${0.14 - distance / 1400})`;
+          context.lineWidth = 0.85;
           context.beginPath();
           context.moveTo(point.x, point.y);
           context.lineTo(candidate.x, candidate.y);
@@ -319,61 +390,43 @@ function setupHeroSignalField() {
       }
     }
 
-    pulseNodes.forEach((pulse) => {
-      const baseX = width * pulse.x;
-      const baseY = height * pulse.y;
-      const progress = (Math.sin(time * 0.0012 + pulse.phase) + 1) / 2;
-      const radius = 10 + progress * 32;
+    const ringAnchors = [
+      { x: width * 0.68, y: height * 0.29, warm: true, phase: 0 },
+      { x: width * 0.74, y: height * 0.73, warm: false, phase: Math.PI * 0.8 },
+    ];
 
-      context.strokeStyle = `rgba(255, 191, 136, ${0.32 - progress * 0.18})`;
-      context.lineWidth = 1.2;
+    ringAnchors.forEach((anchor) => {
+      const progress = (Math.sin(time * 0.0012 + anchor.phase) + 1) / 2;
+      const radius = 18 + progress * 22;
+
+      context.strokeStyle = anchor.warm
+        ? `rgba(228, 162, 108, ${0.22 - progress * 0.12})`
+        : `rgba(108, 138, 228, ${0.22 - progress * 0.12})`;
+      context.lineWidth = 1.1;
       context.beginPath();
-      context.arc(baseX, baseY, radius, 0, Math.PI * 2);
+      context.arc(anchor.x, anchor.y, radius, 0, Math.PI * 2);
       context.stroke();
 
-      context.fillStyle = "rgba(255, 221, 196, 0.88)";
+      context.fillStyle = anchor.warm ? "rgba(255, 224, 196, 0.9)" : "rgba(222, 233, 255, 0.9)";
       context.beginPath();
-      context.arc(baseX, baseY, 2.8, 0, Math.PI * 2);
+      context.arc(anchor.x, anchor.y, 2.6, 0, Math.PI * 2);
       context.fill();
     });
 
-    for (let beamIndex = 0; beamIndex < 5; beamIndex += 1) {
-      const beamAngle = time * 0.00042 + beamIndex * ((Math.PI * 2) / 5);
-      const beamLength = maxRadius * (1.35 + 0.1 * Math.sin(time * 0.0009 + beamIndex));
-      const endX = centerX + Math.cos(beamAngle) * beamLength;
-      const endY = centerY + Math.sin(beamAngle) * beamLength * 0.82;
-      const beamGradient = context.createLinearGradient(centerX, centerY, endX, endY);
-
-      beamGradient.addColorStop(0, "rgba(255, 255, 255, 0.02)");
-      beamGradient.addColorStop(
-        0.52,
-        beamIndex % 2 === 0 ? "rgba(255, 195, 138, 0.22)" : "rgba(138, 173, 255, 0.2)",
-      );
-      beamGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-
-      context.strokeStyle = beamGradient;
-      context.lineWidth = 1.2;
-      context.beginPath();
-      context.moveTo(centerX, centerY);
-      context.lineTo(endX, endY);
-      context.stroke();
-    }
-
-    positions.forEach((point, index) => {
-      const glowRadius = point.size * 5;
-      const pointGlow = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, glowRadius);
-      pointGlow.addColorStop(
+    positions.forEach((point) => {
+      const glow = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, point.size * 6);
+      glow.addColorStop(
         0,
-        index % 2 === 0 ? "rgba(255, 206, 160, 0.95)" : "rgba(166, 194, 255, 0.95)",
+        point.warm ? "rgba(255, 214, 182, 0.92)" : "rgba(210, 226, 255, 0.92)",
       );
-      pointGlow.addColorStop(1, "rgba(255, 255, 255, 0)");
+      glow.addColorStop(1, "rgba(255, 255, 255, 0)");
 
-      context.fillStyle = pointGlow;
+      context.fillStyle = glow;
       context.beginPath();
-      context.arc(point.x, point.y, glowRadius, 0, Math.PI * 2);
+      context.arc(point.x, point.y, point.size * 6, 0, Math.PI * 2);
       context.fill();
 
-      context.fillStyle = index % 2 === 0 ? "rgba(255, 222, 194, 1)" : "rgba(214, 228, 255, 1)";
+      context.fillStyle = point.warm ? "rgba(255, 236, 219, 1)" : "rgba(231, 239, 255, 1)";
       context.beginPath();
       context.arc(point.x, point.y, point.size, 0, Math.PI * 2);
       context.fill();

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dipto | Personal Site</title>
+    <meta
+      name="description"
+      content="A first-pass personal website for Dipto, shaped around recent public GitHub work in AI-assisted products, immigration workflows, and web demos."
+    />
+    <script>
+      document.documentElement.classList.add("js-enabled");
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="background-glow background-glow-a"></div>
+    <div class="background-glow background-glow-b"></div>
+
+    <div class="site-shell">
+      <header class="topbar">
+        <a class="brand" href="#top">Dipto</a>
+        <nav class="nav">
+          <a href="#about">About</a>
+          <a href="#work">Work</a>
+          <a href="#contact">Contact</a>
+        </nav>
+      </header>
+
+      <main id="top">
+        <section class="hero reveal">
+          <div class="hero-copy">
+            <p class="eyebrow">Personal site, v1</p>
+            <h1>
+              Building software for
+              <span>complex workflows</span>
+              that still feels human.
+            </h1>
+            <p class="lede">
+              This first version is grounded in the public work connected to
+              Dipto's GitHub profile: immigration tooling, stakeholder-facing
+              demos, AI-assisted products, and full-stack web builds.
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#work">View selected work</a>
+              <a
+                class="button button-secondary"
+                href="https://github.com/dipto1996"
+                target="_blank"
+                rel="noreferrer"
+                >GitHub profile</a
+              >
+            </div>
+          </div>
+
+          <div class="hero-panel">
+            <div class="signal-card">
+              <p class="signal-label">Current themes</p>
+              <ul class="signal-list">
+                <li>AI-assisted product workflows</li>
+                <li>Immigration and operations-heavy interfaces</li>
+                <li>Demo environments that tell a clear story</li>
+                <li>JavaScript-first product delivery</li>
+              </ul>
+            </div>
+            <div class="signal-strip">
+              <div>
+                <p class="signal-number">8+</p>
+                <p class="signal-caption">public repositories</p>
+              </div>
+              <div>
+                <p class="signal-number">2</p>
+                <p class="signal-caption">live project links found</p>
+              </div>
+              <div>
+                <p class="signal-number">2017</p>
+                <p class="signal-caption">GitHub account started</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="about reveal" id="about">
+          <div class="section-heading">
+            <p class="eyebrow">About</p>
+            <h2>The pattern in the work is already clear.</h2>
+          </div>
+          <div class="about-grid">
+            <p>
+              The recent portfolio points to someone building where product
+              clarity matters most: high-context workflows, domain-heavy tools,
+              and demos that need to make complicated systems feel obvious.
+            </p>
+            <p>
+              That shows up in projects like Settle, where immigration support,
+              deployment, and conversational interfaces all intersect, and in
+              smaller web builds that sharpen visual storytelling and frontend
+              delivery.
+            </p>
+          </div>
+          <p class="about-note">
+            This copy intentionally stays close to verifiable public signals so
+            the site can be expanded later with a fuller personal story,
+            experience, and contact details.
+          </p>
+        </section>
+
+        <section class="projects reveal" id="work">
+          <div class="section-heading">
+            <p class="eyebrow">Selected Work</p>
+            <h2>Projects that define the first impression.</h2>
+          </div>
+          <div class="project-grid" data-project-grid></div>
+        </section>
+
+        <section class="principles reveal">
+          <div class="section-heading">
+            <p class="eyebrow">Working Style</p>
+            <h2>What this body of work suggests.</h2>
+          </div>
+          <div class="principle-grid">
+            <article class="principle-card">
+              <h3>Product-minded engineering</h3>
+              <p>
+                The strongest repos are not isolated experiments. They are
+                product surfaces with users, demos, deployment, and story.
+              </p>
+            </article>
+            <article class="principle-card">
+              <h3>Comfort with ambiguity</h3>
+              <p>
+                Immigration tooling and stakeholder demos both demand structure
+                around messy, shifting requirements.
+              </p>
+            </article>
+            <article class="principle-card">
+              <h3>Applied AI, not just AI branding</h3>
+              <p>
+                The emphasis is on working systems where language models and
+                automation support real tasks instead of existing as decoration.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="contact reveal" id="contact">
+          <p class="eyebrow">Contact</p>
+          <h2>Open the conversation where the work already lives.</h2>
+          <p>
+            For this first version, GitHub is the cleanest call to action.
+            Email, resume links, and a fuller background can slot in next
+            without redesigning the structure.
+          </p>
+          <a
+            class="button button-primary"
+            href="https://github.com/dipto1996"
+            target="_blank"
+            rel="noreferrer"
+            >Connect on GitHub</a
+          >
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p>Built as a first-pass personal site for Dipto.</p>
+        <p>&copy; <span data-year></span></p>
+      </footer>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>

@@ -108,9 +108,53 @@ const ideas = [
   },
 ];
 
+const dashboards = [
+  {
+    label: "Planned dashboard",
+    title: "Operations Dashboard",
+    description:
+      "A calm control surface for workflow status, case movement, and operational exceptions without turning the UI into a wall of noise.",
+  },
+  {
+    label: "Planned dashboard",
+    title: "Executive Dashboard",
+    description:
+      "A higher-level view of throughput, risk, and business signals designed for fast scanning and fast decisions.",
+  },
+  {
+    label: "Planned dashboard",
+    title: "Workflow Intelligence",
+    description:
+      "A decision layer for bottlenecks, anomaly flags, and intervention timing across dense process-heavy work.",
+  },
+];
+
+const solutions = [
+  {
+    label: "Planned solution",
+    title: "Compliance Intelligence",
+    description:
+      "Product surfaces that make regulated, document-heavy workflows more usable without sacrificing trust.",
+  },
+  {
+    label: "Planned solution",
+    title: "Decision Infrastructure",
+    description:
+      "Systems that combine analytics, product logic, and operator judgment where business stakes are real.",
+  },
+  {
+    label: "Planned solution",
+    title: "Workflow Automation",
+    description:
+      "Automation layers that reduce manual coordination while keeping the human decision-maker in control.",
+  },
+];
+
 const projectGrid = document.querySelector("[data-project-grid]");
 const experienceList = document.querySelector("[data-experience-list]");
 const ideasGrid = document.querySelector("[data-ideas-grid]");
+const dashboardGrid = document.querySelector("[data-dashboard-grid]");
+const solutionGrid = document.querySelector("[data-solution-grid]");
 const yearNode = document.querySelector("[data-year]");
 const heroCanvas = document.querySelector("[data-hero-canvas]");
 const heroSection = document.querySelector(".hero");
@@ -184,6 +228,34 @@ if (ideasGrid) {
           <p class="idea-label">${idea.label}</p>
           <h3>${idea.title}</h3>
           <p>${idea.description}</p>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+if (dashboardGrid) {
+  dashboardGrid.innerHTML = dashboards
+    .map(
+      (dashboard) => `
+        <article class="subtle-card">
+          <p class="subtle-label">${dashboard.label}</p>
+          <h3>${dashboard.title}</h3>
+          <p>${dashboard.description}</p>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+if (solutionGrid) {
+  solutionGrid.innerHTML = solutions
+    .map(
+      (solution) => `
+        <article class="subtle-card">
+          <p class="subtle-label">${solution.label}</p>
+          <h3>${solution.title}</h3>
+          <p>${solution.description}</p>
         </article>
       `,
     )

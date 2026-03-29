@@ -2,14 +2,13 @@ const projects = [
   {
     name: "Settle AI",
     type: "AI + compliance",
-    description:
-      "The centerpiece of the site story: using AI to make immigration and compliance workflows more navigable, trustworthy, and operationally useful.",
+    summary:
+      "Building a compliance intelligence layer for immigration workflows, where accuracy, context, and user trust matter more than novelty.",
     problem:
-      "Compliance-heavy workflows are difficult to automate responsibly because the context is messy, the stakes are high, and generic AI patterns break trust quickly.",
+      "High-stakes workflows break quickly when AI is treated like a generic chat surface.",
     built:
-      "AI workflows, retrieval-backed systems, product surfaces, and system thinking around how compliance intelligence should actually behave in the real world.",
-    impact:
-      "Frames Settle as a compliance intelligence layer rather than a thin demo chatbot.",
+      "Product framing, retrieval-aware workflows, system design, and the operating model around how the product should behave under ambiguity.",
+    impact: "Sets the founder narrative: serious AI for regulated work, not just AI theater.",
     repoUrl: "https://github.com/dipto1996/settle-demo",
     liveUrl: "https://settle-demo.vercel.app",
     tags: ["AI workflows", "RAG", "Compliance", "System design"],
@@ -17,14 +16,13 @@ const projects = [
   {
     name: "American Express",
     type: "Analytics at scale",
-    description:
-      "A scaled decision environment where retention modeling, experimentation, and commercial analytics need both rigor and business judgment.",
+    summary:
+      "A scaled decision environment where retention modeling, experimentation, and commercial analytics have to move real business decisions.",
     problem:
-      "Growth and retention decisions are only useful when the analytics can move from dashboards into real operating decisions.",
+      "Analytics only matter when they change decisions, not just dashboards and slide decks.",
     built:
-      "Retention models, experimentation work, and commercial analytics that support clearer decisions in a high-stakes financial context.",
-    impact:
-      "Shows credibility in large-scale data science before the founder/operator chapter.",
+      "Retention models, experimentation work, and commercial analytics shaped for a high-stakes financial context.",
+    impact: "Built rigor around decision systems at scale before moving into founder execution.",
     repoUrl: "",
     liveUrl: "",
     tags: ["Retention models", "Experimentation", "Commercial analytics", "Decision systems"],
@@ -32,14 +30,13 @@ const projects = [
   {
     name: "Writing, Research, and Strategy",
     type: "Thinking in public",
-    description:
-      "The authority layer for the brand: explaining AI systems, compliance workflows, experimentation lessons, and founder execution with enough specificity to be credible.",
+    summary:
+      "Turning technical and product reasoning into artifacts that recruiters, founders, and investors can actually trust.",
     problem:
-      "A profile this cross-functional needs durable proof of thinking, not just titles and short bios.",
+      "Cross-functional profiles are hard to read unless the thinking is made explicit.",
     built:
-      "A content direction around case studies, technical breakdowns, and essays that make the operating logic visible.",
-    impact:
-      "Turns the site from a portfolio into a narrative asset.",
+      "The structure for case studies, technical notes, and essays that show how the operating logic works.",
+    impact: "Creates the authority layer that turns a portfolio into a narrative asset.",
     repoUrl: "https://github.com/dipto1996",
     liveUrl: "",
     tags: ["Writing", "Research", "Strategy", "Founder narrative"],
@@ -115,34 +112,36 @@ const ideasGrid = document.querySelector("[data-ideas-grid]");
 if (projectGrid) {
   projectGrid.innerHTML = projects
     .map(
-      (project) => `
-        <article class="project-card">
-          <div class="project-meta">
-            <span class="project-type">${project.type}</span>
-          </div>
-          <div class="project-copy">
+      (project, index) => `
+        <article class="project-card${index === 0 ? " project-card-featured" : ""}">
+          <div class="project-heading">
+            <div class="project-meta">
+              <span class="project-type">${project.type}</span>
+            </div>
             <h3>${project.name}</h3>
-            <p>${project.description}</p>
+            <p class="project-summary">${project.summary}</p>
           </div>
-          <ul class="project-detail">
-            <li><strong>Problem:</strong> ${project.problem}</li>
-            <li><strong>Built:</strong> ${project.built}</li>
-            <li><strong>Why it matters:</strong> ${project.impact}</li>
-          </ul>
-          <div class="tag-row">
-            ${project.tags.map((tag) => `<span class="tag">${tag}</span>`).join("")}
-          </div>
-          <div class="project-links">
-            ${
-              project.repoUrl
-                ? `<a class="inline-link" href="${project.repoUrl}" target="_blank" rel="noreferrer">Reference</a>`
-                : ""
-            }
-            ${
-              project.liveUrl
-                ? `<a class="inline-link" href="${project.liveUrl}" target="_blank" rel="noreferrer">Live product</a>`
-                : ""
-            }
+          <div class="project-body">
+            <ul class="project-detail">
+              <li><strong>Problem:</strong> ${project.problem}</li>
+              <li><strong>Built:</strong> ${project.built}</li>
+              <li><strong>Why it matters:</strong> ${project.impact}</li>
+            </ul>
+            <div class="tag-row">
+              ${project.tags.map((tag) => `<span class="tag">${tag}</span>`).join("")}
+            </div>
+            <div class="project-links">
+              ${
+                project.repoUrl
+                  ? `<a class="inline-link" href="${project.repoUrl}" target="_blank" rel="noreferrer">Reference</a>`
+                  : ""
+              }
+              ${
+                project.liveUrl
+                  ? `<a class="inline-link" href="${project.liveUrl}" target="_blank" rel="noreferrer">Live product</a>`
+                  : ""
+              }
+            </div>
           </div>
         </article>
       `,

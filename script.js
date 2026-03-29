@@ -113,7 +113,7 @@ const experienceList = document.querySelector("[data-experience-list]");
 const ideasGrid = document.querySelector("[data-ideas-grid]");
 const yearNode = document.querySelector("[data-year]");
 const heroCanvas = document.querySelector("[data-hero-canvas]");
-const heroStage = document.querySelector("[data-hero-stage]");
+const heroSection = document.querySelector(".hero");
 
 if (projectGrid) {
   projectGrid.innerHTML = projects
@@ -197,7 +197,7 @@ if (yearNode) {
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 function setupHeroSignalField() {
-  if (!heroCanvas || !heroStage || prefersReducedMotion.matches) {
+  if (!heroCanvas || !heroSection || prefersReducedMotion.matches) {
     return;
   }
 
@@ -220,8 +220,8 @@ function setupHeroSignalField() {
   let animationFrame = null;
 
   const nodes = Array.from({ length: 18 }, (_, index) => ({
-    baseX: 0.24 + Math.random() * 0.54,
-    baseY: 0.2 + Math.random() * 0.56,
+    baseX: 0.12 + Math.random() * 0.76,
+    baseY: 0.16 + Math.random() * 0.64,
     driftX: (Math.random() - 0.5) * 0.05,
     driftY: (Math.random() - 0.5) * 0.05,
     phase: Math.random() * Math.PI * 2,
@@ -231,15 +231,15 @@ function setupHeroSignalField() {
   }));
 
   const tracks = [
-    { base: 0.23, amp: 0.08, freq: 1.3, speed: 0.00019, warm: true },
-    { base: 0.39, amp: 0.11, freq: 1.05, speed: 0.00014, warm: false },
-    { base: 0.56, amp: 0.09, freq: 1.18, speed: 0.00016, warm: true },
-    { base: 0.74, amp: 0.1, freq: 0.92, speed: 0.00013, warm: false },
+    { base: 0.18, amp: 0.055, freq: 1.28, speed: 0.00019, warm: true },
+    { base: 0.36, amp: 0.072, freq: 1.02, speed: 0.00014, warm: false },
+    { base: 0.58, amp: 0.065, freq: 1.16, speed: 0.00016, warm: true },
+    { base: 0.8, amp: 0.06, freq: 0.9, speed: 0.00013, warm: false },
   ];
 
   const resizeCanvas = () => {
-    width = heroStage.clientWidth;
-    height = heroStage.clientHeight;
+    width = heroSection.clientWidth;
+    height = heroSection.clientHeight;
     heroCanvas.width = Math.floor(width * deviceRatio);
     heroCanvas.height = Math.floor(height * deviceRatio);
     context.setTransform(deviceRatio, 0, 0, deviceRatio, 0, 0);
@@ -448,13 +448,13 @@ function setupHeroSignalField() {
     }
   };
 
-  heroStage.addEventListener("pointermove", (event) => {
-    const bounds = heroStage.getBoundingClientRect();
+  heroSection.addEventListener("pointermove", (event) => {
+    const bounds = heroSection.getBoundingClientRect();
     pointer.targetX = (event.clientX - bounds.left) / bounds.width;
     pointer.targetY = (event.clientY - bounds.top) / bounds.height;
   });
 
-  heroStage.addEventListener("pointerleave", () => {
+  heroSection.addEventListener("pointerleave", () => {
     pointer.targetX = 0.5;
     pointer.targetY = 0.5;
   });

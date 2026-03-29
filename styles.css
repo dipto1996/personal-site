@@ -163,7 +163,8 @@ main {
 }
 
 .hero-copy,
-.hero-visual {
+.hero-visual,
+.hero-proof {
   position: relative;
   z-index: 1;
 }
@@ -279,38 +280,10 @@ main {
   background: transparent;
 }
 
-.hero-visual {
-  display: grid;
-  align-content: start;
-  gap: 1rem;
-}
-
-.hero-visual-head {
-  max-width: 29rem;
-  padding: 0.3rem 0.2rem 0;
-}
-
-.hero-visual-copy {
-  margin: 0;
-  color: rgba(244, 239, 230, 0.66);
-}
-
-.hero-stage {
-  position: relative;
-  min-height: 31rem;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 30px;
-  background:
-    radial-gradient(circle at 26% 78%, rgba(208, 140, 84, 0.14), transparent 24%),
-    radial-gradient(circle at 74% 30%, rgba(95, 125, 227, 0.16), transparent 28%),
-    linear-gradient(145deg, rgba(13, 17, 24, 0.98) 0%, rgba(18, 23, 31, 0.98) 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
-
 .hero-canvas,
-.hero-stage-grid,
-.hero-stage-glow {
+.hero-grid,
+.hero-glow,
+.hero-vignette {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -319,26 +292,52 @@ main {
 .hero-canvas {
   width: 100%;
   height: 100%;
+  z-index: 0;
 }
 
-.hero-stage-grid {
+.hero-grid {
+  z-index: 0;
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
   background-size: 34px 34px;
-  opacity: 0.4;
-  mask-image: radial-gradient(circle at 54% 48%, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.2));
+  opacity: 0.38;
+  mask-image: radial-gradient(circle at 54% 46%, rgba(0, 0, 0, 0.94), rgba(0, 0, 0, 0.32));
 }
 
-.hero-stage-glow {
+.hero-glow {
+  z-index: 0;
   background:
-    radial-gradient(circle at 34% 72%, rgba(213, 144, 89, 0.12), transparent 18%),
-    radial-gradient(circle at 72% 34%, rgba(95, 125, 227, 0.14), transparent 22%);
+    radial-gradient(circle at 28% 70%, rgba(213, 144, 89, 0.12), transparent 20%),
+    radial-gradient(circle at 76% 24%, rgba(95, 125, 227, 0.14), transparent 26%);
   filter: blur(18px);
 }
 
+.hero-vignette {
+  z-index: 0;
+  background:
+    linear-gradient(90deg, rgba(8, 11, 16, 0.9) 0%, rgba(8, 11, 16, 0.72) 24%, rgba(8, 11, 16, 0.28) 48%, rgba(8, 11, 16, 0.42) 100%),
+    radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0), rgba(4, 7, 11, 0.28) 92%);
+}
+
+.hero-visual {
+  display: grid;
+  align-content: center;
+  gap: 1rem;
+}
+
+.hero-visual-head {
+  max-width: 25rem;
+  padding: 0.3rem 0.2rem 0;
+}
+
+.hero-visual-copy {
+  margin: 0;
+  color: rgba(244, 239, 230, 0.66);
+}
+
 .hero-stage-card {
-  position: absolute;
+  position: relative;
   z-index: 1;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
@@ -348,9 +347,7 @@ main {
 }
 
 .hero-stage-card-top {
-  top: 1.1rem;
-  left: 1.1rem;
-  width: min(16rem, calc(100% - 2.2rem));
+  width: min(17rem, 100%);
   padding: 1rem 1.05rem;
   animation: panelFloat 9s ease-in-out infinite;
 }
@@ -386,12 +383,10 @@ main {
 }
 
 .hero-stage-card-bottom {
-  right: 1.1rem;
-  bottom: 1.1rem;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.8rem;
-  width: min(27rem, calc(100% - 2.2rem));
+  width: min(28rem, 100%);
   padding: 0.95rem;
   animation: panelFloatReverse 10s ease-in-out infinite;
 }
@@ -403,8 +398,6 @@ main {
 }
 
 .hero-proof {
-  position: relative;
-  z-index: 1;
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -783,10 +776,6 @@ main {
     grid-template-columns: 1fr;
   }
 
-  .hero-stage {
-    min-height: 28rem;
-  }
-
   .hero-proof,
   .credibility-strip,
   .idea-grid {
@@ -845,23 +834,12 @@ main {
     font-size: 1.14rem;
   }
 
-  .hero-stage {
-    min-height: 24rem;
-  }
-
   .hero-stage-card-top,
   .hero-stage-card-bottom {
-    width: calc(100% - 1.6rem);
-  }
-
-  .hero-stage-card-top {
-    top: 0.8rem;
-    left: 0.8rem;
+    width: 100%;
   }
 
   .hero-stage-card-bottom {
-    right: 0.8rem;
-    bottom: 0.8rem;
     grid-template-columns: 1fr;
   }
 

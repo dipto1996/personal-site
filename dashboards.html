@@ -6,7 +6,7 @@
     <title>Dashboards | Diptopal Roy</title>
     <meta
       name="description"
-      content="Dashboard concepts and planned builds by Diptopal Roy."
+      content="Interactive dashboard surfaces by Diptopal Roy, shown as product proof inside a personal site."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -23,9 +23,9 @@
         <a class="brand" href="./index.html">Diptopal Roy</a>
         <nav class="nav">
           <a href="./about.html" data-page-target="about">About</a>
+          <a href="./work.html" data-page-target="work">Work</a>
           <a href="./dashboards.html" data-page-target="dashboards">Dashboards</a>
           <a href="./solutions.html" data-page-target="solutions">Solutions</a>
-          <a href="./work.html" data-page-target="work">Work</a>
           <a href="./experience.html" data-page-target="experience">Experience</a>
           <a href="./writing.html" data-page-target="writing">Writing</a>
           <a href="./contact.html" data-page-target="contact">Contact</a>
@@ -37,39 +37,69 @@
         <section class="page-hero">
           <div class="page-hero-copy">
             <p class="eyebrow">Dashboards</p>
-            <h1>TenderRadar: procurement visibility with a bid / no-bid brain.</h1>
+            <h1>Interactive product dashboards, shown here as proof of work.</h1>
             <p>
-              This page is now the live home of TenderRadar. The goal is not to
-              dump every tender into a noisy feed. The goal is to help Indian
-              SMEs see which bids fit, why they fit, and where qualification
-              gaps will block them.
+              This page is intentionally deeper in the funnel. It is for
+              visitors who already understand the profile and now want to
+              inspect how the product thinking shows up in a working surface.
             </p>
           </div>
           <div class="page-hero-grid">
             <article class="page-hero-card">
-              <strong>Fit before volume</strong>
-              <p>Procurement products become useful when they rank opportunities, not when they list everything.</p>
+              <strong>Working surface</strong>
+              <p>These are not static mocks. The point is to make product judgment visible inside an interactive interface.</p>
             </article>
             <article class="page-hero-card">
-              <strong>Qualification visible</strong>
-              <p>SMEs need turnover, credential, and urgency signals exposed fast before a team wastes bid effort.</p>
+              <strong>Decision support</strong>
+              <p>The dashboards are structured around calls a user actually has to make, not vanity metrics.</p>
             </article>
             <article class="page-hero-card">
-              <strong>Source-aware</strong>
-              <p>Every opportunity should feel traceable back to the source portal, not hallucinated out of a black box.</p>
+              <strong>Product proof</strong>
+              <p>On a personal site, this page should demonstrate build quality and systems thinking, not replace the personal narrative.</p>
             </article>
           </div>
         </section>
 
-        <section class="section">
+        <section class="product-jump-section">
+          <div class="product-jump-bar">
+            <a class="product-jump-link" href="#tenderradar-workspace">
+              <span>Tenders</span>
+              <strong>TenderRadar</strong>
+            </a>
+            <a class="product-jump-link" href="./solutions.html#verifysme-workspace">
+              <span>Suppliers</span>
+              <strong>VerifySME</strong>
+            </a>
+            <a class="product-jump-link" href="./solutions.html#exportpulse-workspace">
+              <span>Exports</span>
+              <strong>ExportPulse</strong>
+            </a>
+          </div>
+          <div class="proof-strip">
+            <article class="proof-card">
+              <span>Core job</span>
+              <strong>Bid qualification with visible thresholds, not dashboard theater</strong>
+            </article>
+            <article class="proof-card">
+              <span>What to inspect</span>
+              <strong>How the interface drives a concrete decision rather than just displaying data</strong>
+            </article>
+            <article class="proof-card">
+              <span>Connected workflow</span>
+              <strong>Supplier diligence, procurement judgment, and route planning share one operating logic</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="tenderradar-workspace">
           <div class="section-shell">
             <div class="section-heading">
-              <p class="eyebrow">Live Dashboard</p>
-              <h2>TenderRadar deep dive.</h2>
+              <p class="eyebrow">TenderRadar Workspace</p>
+              <h2>Bid qualification with a live review queue.</h2>
               <p class="section-intro">
-                The first dashboard page is now a real product surface. This
-                V1 focuses on profile-aware procurement triage for Indian SMEs,
-                with room to expand into live portal ingestion and alerting.
+                The workspace is built around one customer decision: pursue,
+                qualify, partner, or walk away. That is the right standard for
+                product proof on a personal site too.
               </p>
             </div>
             <div data-tenderradar-app></div>
@@ -78,16 +108,31 @@
         </section>
 
         <section class="section">
+          <div class="section-shell">
+            <div class="section-heading">
+              <p class="eyebrow">Shared Ops Layer</p>
+              <h2>Workspace control center for alerts, plan state, and source sync.</h2>
+              <p class="section-intro">
+                This is the operating layer behind the product suite: workspace membership,
+                saved alerts, live-source refresh, and plan controls all sit
+                here instead of being hidden behind a fake demo shell.
+              </p>
+            </div>
+            <div data-control-center-app></div>
+          </div>
+        </section>
+
+        <section class="section">
           <div class="section-shell section-shell-split">
             <div class="section-heading">
-              <p class="eyebrow">Design Principles</p>
-              <h2>What good dashboard work should feel like.</h2>
+              <p class="eyebrow">Why It Belongs Here</p>
+              <h2>What this page should prove about the work.</h2>
             </div>
             <ul class="strength-list">
-              <li>Fast scanning before deep reading.</li>
-              <li>Signal above decoration.</li>
-              <li>Dense information without visual panic.</li>
-              <li>Clear paths from summary to action.</li>
+              <li>The interface is anchored in a real operational decision.</li>
+              <li>The logic is visible enough to inspect, not just admire visually.</li>
+              <li>The product can connect data, workflow, and action in one surface.</li>
+              <li>The build is credible evidence of how I think, not a detached demo artifact.</li>
             </ul>
           </div>
         </section>
@@ -99,6 +144,6 @@
       </footer>
     </div>
 
-    <script src="./script.js"></script>
+    <script type="module" src="./script.js"></script>
   </body>
 </html>

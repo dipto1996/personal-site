@@ -1,5 +1,9 @@
-import { initTradeGraph } from "./apps/tradegraph/ui/tradegraph.js";
+import { mountCompanyGraph } from "./apps/companygraph/index.js";
+import { mountExportPulse } from "./apps/exportpulse/index.js";
 import { mountTenderRadar } from "./apps/tenderradar/index.js";
+import { mountControlCenter } from "./apps/tradegraph/ui/control-center.js";
+import { mountVerifySME } from "./apps/verifysme/index.js";
+import { mountAuthControls } from "./lib/workspace-client.js";
 
 const projects = [
   {
@@ -18,6 +22,21 @@ const projects = [
     tags: ["AI workflows", "RAG", "Compliance", "System design"],
   },
   {
+    name: "TradeGraph India",
+    type: "Product suite",
+    summary:
+      "A connected set of product surfaces for supplier diligence, procurement qualification, and export route planning, built to make workflow logic inspectable.",
+    problem:
+      "Commercial teams do not need another dataset in isolation. They need sharper decisions across trust, demand, and expansion.",
+    built:
+      "VerifySME, TenderRadar, ExportPulse, and the shared operating layer tying those surfaces together.",
+    impact:
+      "Turns product thinking into something visitors can actually inspect on this site instead of keeping it abstract.",
+    repoUrl: "https://github.com/dipto1996/personal-site",
+    liveUrl: "",
+    tags: ["Product strategy", "Workflow design", "Interactive demos", "Systems thinking"],
+  },
+  {
     name: "American Express",
     type: "Analytics at scale",
     summary:
@@ -27,25 +46,10 @@ const projects = [
     built:
       "Retention models, experimentation work, and commercial analytics shaped for a high-stakes financial context.",
     impact:
-      "Built rigor around decision systems at scale before moving into founder execution.",
+      "Built rigor around decision systems at scale before moving deeper into product and founder execution.",
     repoUrl: "",
     liveUrl: "",
     tags: ["Retention models", "Experimentation", "Commercial analytics", "Decision systems"],
-  },
-  {
-    name: "Writing, Research, and Strategy",
-    type: "Thinking in public",
-    summary:
-      "Turning technical and product reasoning into artifacts that recruiters, founders, and investors can actually trust.",
-    problem:
-      "Cross-functional profiles are hard to read unless the thinking is made explicit.",
-    built:
-      "The structure for case studies, technical notes, and essays that show how the operating logic works.",
-    impact:
-      "Creates the authority layer that turns a portfolio into a narrative asset.",
-    repoUrl: "https://github.com/dipto1996",
-    liveUrl: "",
-    tags: ["Writing", "Research", "Strategy", "Founder narrative"],
   },
 ];
 
@@ -138,18 +142,54 @@ const solutions = [
     title: "VerifySME",
     description:
       "Buyer-side supplier verification and comparison using public trust signals, evidence depth, and readiness scoring.",
+    buyer: "Sourcing lead",
+    question: "Can I trust and shortlist this supplier?",
+    href: "./solutions.html#verifysme-workspace",
   },
   {
     label: "Live now",
     title: "TenderRadar",
     description:
       "Tender discovery and qualification on top of the same company graph so relevant bids surface without manual portal hopping.",
+    buyer: "Bid manager",
+    question: "Should we bid, qualify, or walk away?",
+    href: "./dashboards.html#tenderradar-workspace",
   },
   {
-    label: "Queued next",
+    label: "Live now",
     title: "ExportPulse",
     description:
       "Export opportunity and readiness intelligence built on the same supplier identity, compliance, and capability layer.",
+    buyer: "Export manager",
+    question: "Which market can we actually enter next?",
+    href: "./solutions.html#exportpulse-workspace",
+  },
+];
+
+const useCases = [
+  {
+    title: "Procurement and bid teams",
+    summary:
+      "Use VerifySME to qualify suppliers, TenderRadar to rank relevant bids, and ExportPulse when the same suppliers need cross-border growth paths.",
+    outcome: "Faster bid / no-bid decisions with less portal noise and less vendor ambiguity.",
+  },
+  {
+    title: "Enterprise sourcing and quality teams",
+    summary:
+      "Screen Indian suppliers with public trust and capability signals before deeper diligence or RFQ outreach.",
+    outcome: "Shorter longlists, better supplier trust, and fewer dead-end sourcing conversations.",
+  },
+  {
+    title: "Banks, NBFCs, and trade-enablement teams",
+    summary:
+      "Assess whether an SME is credible, commercially active, procurement-capable, and export-ready using one connected evidence graph.",
+    outcome: "Better origination, underwriting context, and SME-growth support workflows.",
+  },
+  {
+    title: "Export advisors and industry programs",
+    summary:
+      "Turn exporter readiness into route-by-route action plans instead of generic export-awareness material.",
+    outcome: "More usable market-entry guidance and clearer program intervention points.",
   },
 ];
 
@@ -158,10 +198,16 @@ const experienceList = document.querySelector("[data-experience-list]");
 const ideasGrid = document.querySelector("[data-ideas-grid]");
 const dashboardGrid = document.querySelector("[data-dashboard-grid]");
 const solutionGrid = document.querySelector("[data-solution-grid]");
+const useCaseGrid = document.querySelector("[data-usecase-grid]");
 const yearNode = document.querySelector("[data-year]");
 const heroCanvas = document.querySelector("[data-hero-canvas]");
 const heroSection = document.querySelector(".hero");
+const companyGraphRoot = document.querySelector("[data-company-graph-app]");
 const tenderRadarRoot = document.querySelector("[data-tenderradar-app]");
+const verifySMERoot = document.querySelector("[data-verifysme-app]");
+const exportPulseRoot = document.querySelector("[data-exportpulse-app]");
+const controlCenterRoots = [...document.querySelectorAll("[data-control-center-app]")];
+const topbar = document.querySelector(".topbar");
 const currentPage = document.body.dataset.page;
 
 if (currentPage) {
@@ -266,10 +312,36 @@ if (solutionGrid) {
   solutionGrid.innerHTML = solutions
     .map(
       (solution) => `
-        <article class="subtle-card">
+        <article class="tradegraph-module-card product-module-card">
           <p class="subtle-label">${solution.label}</p>
           <h3>${solution.title}</h3>
           <p>${solution.description}</p>
+          <div class="product-module-meta">
+            <div>
+              <span>Best for</span>
+              <strong>${solution.buyer}</strong>
+            </div>
+            <div>
+              <span>Answers</span>
+              <strong>${solution.question}</strong>
+            </div>
+          </div>
+          <a class="product-module-link" href="${solution.href}">Open module</a>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+if (useCaseGrid) {
+  useCaseGrid.innerHTML = useCases
+    .map(
+      (item) => `
+        <article class="subtle-card">
+          <p class="subtle-label">Use case</p>
+          <h3>${item.title}</h3>
+          <p>${item.summary}</p>
+          <p class="subtle-outcome">${item.outcome}</p>
         </article>
       `,
     )
@@ -559,5 +631,9 @@ function setupHeroSignalField() {
 }
 
 setupHeroSignalField();
+mountAuthControls(topbar);
+mountCompanyGraph(companyGraphRoot);
+mountVerifySME(verifySMERoot);
 mountTenderRadar(tenderRadarRoot);
-initTradeGraph();
+mountExportPulse(exportPulseRoot);
+controlCenterRoots.forEach((root) => mountControlCenter(root));

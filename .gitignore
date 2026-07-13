@@ -1,1 +1,8 @@
 .DS_Store
+node_modules
+.vercel
+.data
+.env.local
+public
+.env*.local
+tmp

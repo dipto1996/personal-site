@@ -8,6 +8,15 @@
       name="description"
       content="Contact Diptopal Roy for roles, product conversations, collaborations, and founder-led work."
     />
+    <link rel="canonical" href="https://diptopal-roy-site.vercel.app/contact.html" />
+    <meta property="og:title" content="Contact | Diptopal Roy" />
+    <meta
+      property="og:description"
+      content="Structured contact for hiring, product evaluation, buyer conversations, and collaboration."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://diptopal-roy-site.vercel.app/contact.html" />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -24,13 +33,13 @@
         <nav class="nav">
           <a href="./about.html" data-page-target="about">About</a>
           <a href="./work.html" data-page-target="work">Work</a>
-          <a href="./dashboards.html" data-page-target="dashboards">Dashboards</a>
-          <a href="./solutions.html" data-page-target="solutions">Solutions</a>
+          <a href="./tradegraph/index.html" data-page-target="tradegraph">TradeGraph</a>
+          <a href="./job-search.html" data-page-target="jobsearch">Job Search</a>
           <a href="./experience.html" data-page-target="experience">Experience</a>
           <a href="./writing.html" data-page-target="writing">Writing</a>
           <a href="./contact.html" data-page-target="contact">Contact</a>
         </nav>
-        <a class="nav-cta" href="mailto:roydiptopal1996@gmail.com">Get in touch</a>
+        <a class="nav-cta" href="./contact.html?intent=general&source=contact">Get in touch</a>
       </header>
 
       <main class="page-stack">
@@ -64,16 +73,17 @@
           <div class="contact-band">
             <div class="contact-copy">
               <p class="eyebrow">Direct</p>
-              <h2>Use the path that matches why you are here.</h2>
+              <h2>Use the structured lead path first.</h2>
               <p>
-                Email is still the cleanest route. I would rather start from a
-                concrete brief or question than a vague intro.
+                The form below persists the lead even when delivery providers
+                are unavailable. Email is still available as a truthful
+                fallback, but it is no longer the only route.
               </p>
             </div>
             <div class="contact-panel">
-              <a class="contact-link" href="mailto:roydiptopal1996@gmail.com?subject=Hiring%20conversation">Hiring conversation</a>
-              <a class="contact-link" href="mailto:roydiptopal1996@gmail.com?subject=Product%20review">Product review</a>
-              <a class="contact-link" href="mailto:roydiptopal1996@gmail.com?subject=Collaboration%20conversation">Collaboration conversation</a>
+              <a class="contact-link" href="#lead-form">Submit lead form</a>
+              <a class="contact-link" href="./tradegraph/index.html">Open TradeGraph</a>
+              <a class="contact-link" href="./writing.html">Read product notes</a>
               <a
                 class="contact-link"
                 href="https://github.com/dipto1996"
@@ -81,8 +91,73 @@
                 rel="noreferrer"
                 >github.com/dipto1996</a
               >
-              <p class="contact-note">If you need a current resume or more context than the site shows, ask directly in the first note.</p>
+              <p class="contact-note">If you need a resume or more context than the site shows, include that in the first note so the response can stay concrete.</p>
             </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-shell section-shell-split">
+            <div class="section-heading">
+              <p class="eyebrow">Lead Capture</p>
+              <h2 id="lead-form">Start with context, not a vague intro.</h2>
+              <p class="section-intro">
+                This form persists product, hiring, and buyer inquiries. If
+                email delivery is unavailable on the current deployment, the
+                lead is still stored and you can fall back to direct email.
+              </p>
+            </div>
+            <form class="lead-form" data-lead-form>
+              <div class="lead-form-grid">
+                <label class="lead-field">
+                  <span>Name</span>
+                  <input type="text" name="name" required placeholder="Your name" />
+                </label>
+                <label class="lead-field">
+                  <span>Email</span>
+                  <input type="email" name="email" required placeholder="you@company.com" />
+                </label>
+                <label class="lead-field">
+                  <span>Company / team</span>
+                  <input type="text" name="company" placeholder="Company or team" />
+                </label>
+                <label class="lead-field">
+                  <span>Reason</span>
+                  <select name="reason" required>
+                    <option value="product-evaluator">Product evaluation</option>
+                    <option value="hiring">Hiring / recruiter</option>
+                    <option value="operator-buyer">Operator / buyer conversation</option>
+                    <option value="collaboration">Collaboration</option>
+                    <option value="general">General</option>
+                  </select>
+                </label>
+                <label class="lead-field">
+                  <span>Product focus</span>
+                  <select name="product">
+                    <option value="">General</option>
+                    <option value="TradeGraph">TradeGraph</option>
+                    <option value="Settle AI">Settle AI</option>
+                    <option value="Role fit">Role fit</option>
+                  </select>
+                </label>
+                <label class="lead-field">
+                  <span>Timeline</span>
+                  <input type="text" name="timeline" placeholder="Immediate / this quarter / exploratory" />
+                </label>
+                <label class="lead-field lead-field--full">
+                  <span>Message</span>
+                  <textarea name="message" rows="7" required placeholder="What are you evaluating, why now, and what outcome do you want from the first conversation?"></textarea>
+                </label>
+              </div>
+              <input type="hidden" name="sourcePage" value="/contact.html" />
+              <div class="lead-form-actions">
+                <button type="submit" class="button button-primary">Submit lead</button>
+                <a class="button button-secondary" href="mailto:roydiptopal1996@gmail.com?subject=Direct%20contact">Direct email fallback</a>
+              </div>
+              <p class="lead-status" data-lead-status data-state="idle">
+                Lead capture is enabled here. Submission status will appear after send.
+              </p>
+            </form>
           </div>
         </section>
 

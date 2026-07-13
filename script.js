@@ -1,201 +1,23 @@
 import { mountCompanyGraph } from "./apps/companygraph/index.js";
 import { mountExportPulse } from "./apps/exportpulse/index.js";
+import { mountJobSearch } from "./apps/jobsearch/index.js";
 import { mountTenderRadar } from "./apps/tenderradar/index.js";
 import { mountControlCenter } from "./apps/tradegraph/ui/control-center.js";
 import { mountVerifySME } from "./apps/verifysme/index.js";
+import {
+  dashboards,
+  experience,
+  projects,
+  solutions,
+  useCases,
+  writingEntries,
+} from "./lib/site-content.js";
 import { mountAuthControls } from "./lib/workspace-client.js";
-
-const projects = [
-  {
-    name: "Settle AI",
-    type: "AI + compliance",
-    summary:
-      "Building a compliance intelligence layer for immigration workflows, where accuracy, context, and user trust matter more than novelty.",
-    problem:
-      "High-stakes workflows break quickly when AI is treated like a generic chat surface.",
-    built:
-      "Product framing, retrieval-aware workflows, system design, and the operating model around how the product should behave under ambiguity.",
-    impact:
-      "Turns the founder narrative into something concrete: serious AI for regulated work, not just AI theater.",
-    repoUrl: "https://github.com/dipto1996/settle-demo",
-    liveUrl: "https://settle-demo.vercel.app",
-    tags: ["AI workflows", "RAG", "Compliance", "System design"],
-  },
-  {
-    name: "TradeGraph India",
-    type: "Product suite",
-    summary:
-      "A connected set of product surfaces for supplier diligence, procurement qualification, and export route planning, built to make workflow logic inspectable.",
-    problem:
-      "Commercial teams do not need another dataset in isolation. They need sharper decisions across trust, demand, and expansion.",
-    built:
-      "VerifySME, TenderRadar, ExportPulse, and the shared operating layer tying those surfaces together.",
-    impact:
-      "Turns product thinking into something visitors can actually inspect on this site instead of keeping it abstract.",
-    repoUrl: "https://github.com/dipto1996/personal-site",
-    liveUrl: "",
-    tags: ["Product strategy", "Workflow design", "Interactive demos", "Systems thinking"],
-  },
-  {
-    name: "American Express",
-    type: "Analytics at scale",
-    summary:
-      "A scaled decision environment where retention modeling, experimentation, and commercial analytics have to move real business decisions.",
-    problem:
-      "Analytics only matter when they change decisions, not when they stay trapped in dashboards and slide decks.",
-    built:
-      "Retention models, experimentation work, and commercial analytics shaped for a high-stakes financial context.",
-    impact:
-      "Built rigor around decision systems at scale before moving deeper into product and founder execution.",
-    repoUrl: "",
-    liveUrl: "",
-    tags: ["Retention models", "Experimentation", "Commercial analytics", "Decision systems"],
-  },
-];
-
-const experience = [
-  {
-    period: "Current chapter",
-    role: "Founder / Operator",
-    organization: "Settle AI",
-    bullets: [
-      "Building AI and compliance workflows that prioritize trust, usability, and operational clarity.",
-      "Working across product framing, technical direction, system design, and execution.",
-      "Using Settle as the clearest proof of founder-led operator capability.",
-    ],
-  },
-  {
-    period: "Previous chapter",
-    role: "Data Scientist",
-    organization: "American Express",
-    bullets: [
-      "Worked on retention models, experimentation, and commercial analytics in a scaled decision environment.",
-      "Developed judgment around how data science translates into business operating leverage.",
-      "Built credibility in financial systems before moving deeper into product and startup work.",
-    ],
-  },
-  {
-    period: "Education",
-    role: "Cornell Tech",
-    organization: "Graduate work",
-    bullets: [
-      "Sharpened the bridge between technical execution, startup thinking, and product judgment.",
-      "Added a venture and operator layer to an already strong quantitative background.",
-    ],
-  },
-  {
-    period: "Education",
-    role: "IIT Guwahati",
-    organization: "Engineering foundation",
-    bullets: [
-      "Built the technical base that later expanded into analytics, product, and founder execution.",
-      "Established the quantitative discipline behind the later American Express and Settle chapters.",
-    ],
-  },
-];
-
-const ideas = [
-  {
-    label: "Essay seed",
-    title: "What makes domain RAG actually useful",
-    description:
-      "A grounded view on when retrieval improves decision quality, when it adds noise, and what it takes to make it trustworthy in a compliance-heavy workflow.",
-  },
-  {
-    label: "Case study seed",
-    title: "Building Settle as a compliance intelligence layer",
-    description:
-      "A full breakdown of the problem, system design, product choices, and why the right framing for Settle is more than a chatbot wrapper.",
-  },
-  {
-    label: "Operator note",
-    title: "Experimentation lessons from American Express",
-    description:
-      "What scaled analytics work teaches about decision systems, organizational trust, and how to turn models into actual action.",
-  },
-];
-
-const dashboards = [
-  {
-    label: "Live module signal",
-    title: "Fit-ranked procurement stream",
-    description:
-      "TenderRadar ranks opportunities by likely bid fit so SMEs spend time on plausible bids instead of portal noise.",
-  },
-  {
-    label: "Live module signal",
-    title: "Qualification gap visibility",
-    description:
-      "Turnover thresholds, credentials, and urgency are surfaced quickly so bid/no-bid decisions are faster and clearer.",
-  },
-  {
-    label: "Live module signal",
-    title: "Buyer and sector mix",
-    description:
-      "The dashboard keeps one eye on the single tender and one eye on the market pattern building around the profile.",
-  },
-];
-
-const solutions = [
-  {
-    label: "Live now",
-    title: "VerifySME",
-    description:
-      "Buyer-side supplier verification and comparison using public trust signals, evidence depth, and readiness scoring.",
-    buyer: "Sourcing lead",
-    question: "Can I trust and shortlist this supplier?",
-    href: "./solutions.html#verifysme-workspace",
-  },
-  {
-    label: "Live now",
-    title: "TenderRadar",
-    description:
-      "Tender discovery and qualification on top of the same company graph so relevant bids surface without manual portal hopping.",
-    buyer: "Bid manager",
-    question: "Should we bid, qualify, or walk away?",
-    href: "./dashboards.html#tenderradar-workspace",
-  },
-  {
-    label: "Live now",
-    title: "ExportPulse",
-    description:
-      "Export opportunity and readiness intelligence built on the same supplier identity, compliance, and capability layer.",
-    buyer: "Export manager",
-    question: "Which market can we actually enter next?",
-    href: "./solutions.html#exportpulse-workspace",
-  },
-];
-
-const useCases = [
-  {
-    title: "Procurement and bid teams",
-    summary:
-      "Use VerifySME to qualify suppliers, TenderRadar to rank relevant bids, and ExportPulse when the same suppliers need cross-border growth paths.",
-    outcome: "Faster bid / no-bid decisions with less portal noise and less vendor ambiguity.",
-  },
-  {
-    title: "Enterprise sourcing and quality teams",
-    summary:
-      "Screen Indian suppliers with public trust and capability signals before deeper diligence or RFQ outreach.",
-    outcome: "Shorter longlists, better supplier trust, and fewer dead-end sourcing conversations.",
-  },
-  {
-    title: "Banks, NBFCs, and trade-enablement teams",
-    summary:
-      "Assess whether an SME is credible, commercially active, procurement-capable, and export-ready using one connected evidence graph.",
-    outcome: "Better origination, underwriting context, and SME-growth support workflows.",
-  },
-  {
-    title: "Export advisors and industry programs",
-    summary:
-      "Turn exporter readiness into route-by-route action plans instead of generic export-awareness material.",
-    outcome: "More usable market-entry guidance and clearer program intervention points.",
-  },
-];
 
 const projectGrid = document.querySelector("[data-project-grid]");
 const experienceList = document.querySelector("[data-experience-list]");
 const ideasGrid = document.querySelector("[data-ideas-grid]");
+const writingLibrary = document.querySelector("[data-writing-library]");
 const dashboardGrid = document.querySelector("[data-dashboard-grid]");
 const solutionGrid = document.querySelector("[data-solution-grid]");
 const useCaseGrid = document.querySelector("[data-usecase-grid]");
@@ -206,9 +28,20 @@ const companyGraphRoot = document.querySelector("[data-company-graph-app]");
 const tenderRadarRoot = document.querySelector("[data-tenderradar-app]");
 const verifySMERoot = document.querySelector("[data-verifysme-app]");
 const exportPulseRoot = document.querySelector("[data-exportpulse-app]");
+const jobSearchRoot = document.querySelector("[data-job-search-app]");
 const controlCenterRoots = [...document.querySelectorAll("[data-control-center-app]")];
 const topbar = document.querySelector(".topbar");
 const currentPage = document.body.dataset.page;
+const leadForms = [...document.querySelectorAll("[data-lead-form]")];
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
 
 if (currentPage) {
   document.querySelectorAll("[data-page-target]").forEach((link) => {
@@ -281,13 +114,51 @@ if (experienceList) {
 }
 
 if (ideasGrid) {
-  ideasGrid.innerHTML = ideas
+  ideasGrid.innerHTML = writingEntries
     .map(
-      (idea) => `
+      (entry) => `
         <article class="idea-card">
-          <p class="idea-label">${idea.label}</p>
-          <h3>${idea.title}</h3>
-          <p>${idea.description}</p>
+          <p class="idea-label">${entry.label}</p>
+          <h3>${entry.title}</h3>
+          <p>${entry.description}</p>
+          <div class="idea-meta">
+            <span>${entry.readTime}</span>
+            <a class="inline-link" href="#${entry.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}">Read note</a>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
+}
+
+if (writingLibrary) {
+  writingLibrary.innerHTML = writingEntries
+    .map(
+      (entry) => `
+        <article class="writing-entry" id="${entry.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}">
+          <div class="writing-entry-head">
+            <div>
+              <p class="idea-label">${entry.label}</p>
+              <h2>${entry.title}</h2>
+            </div>
+            <span class="writing-read-time">${entry.readTime}</span>
+          </div>
+          <p class="writing-thesis">${entry.thesis}</p>
+          <div class="writing-sections">
+            ${entry.sections
+              .map(
+                (section) => `
+                  <section class="writing-section-block">
+                    <h3>${section.heading}</h3>
+                    ${section.paragraphs.map((paragraph) => `<p>${paragraph}</p>`).join("")}
+                  </section>
+                `,
+              )
+              .join("")}
+          </div>
+          <div class="writing-entry-actions">
+            <a class="button button-secondary" href="${entry.callToAction.href}">${entry.callToAction.label}</a>
+          </div>
         </article>
       `,
     )
@@ -351,6 +222,122 @@ if (useCaseGrid) {
 if (yearNode) {
   yearNode.textContent = new Date().getFullYear();
 }
+
+function prefillLeadForm(form) {
+  const params = new URLSearchParams(window.location.search);
+  const reasonInput = form.querySelector('[name="reason"]');
+  const productInput = form.querySelector('[name="product"]');
+  const messageInput = form.querySelector('[name="message"]');
+  const sourcePageInput = form.querySelector('[name="sourcePage"]');
+
+  if (reasonInput && params.get("intent")) {
+    reasonInput.value = params.get("intent");
+  }
+
+  if (productInput && params.get("product")) {
+    productInput.value = params.get("product");
+  }
+
+  if (messageInput && !messageInput.value) {
+    const source = params.get("source");
+    const intent = params.get("intent");
+    const product = params.get("product");
+    const prompt = [
+      intent ? `Intent: ${intent.replaceAll("-", " ")}` : "",
+      product ? `Product: ${product}` : "",
+      source ? `Source page: ${source}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    if (prompt) {
+      messageInput.value = `${prompt}\n\nContext:\n`;
+    }
+  }
+
+  if (sourcePageInput) {
+    sourcePageInput.value = params.get("source") || window.location.pathname;
+  }
+}
+
+function buildLeadFallbackMailto(formData) {
+  const subject = encodeURIComponent(
+    `Personal site lead: ${formData.get("reason") || "general"}${formData.get("product") ? ` / ${formData.get("product")}` : ""}`,
+  );
+  const body = encodeURIComponent(
+    [
+      `Name: ${formData.get("name") || ""}`,
+      `Email: ${formData.get("email") || ""}`,
+      `Company: ${formData.get("company") || ""}`,
+      `Reason: ${formData.get("reason") || ""}`,
+      `Product: ${formData.get("product") || ""}`,
+      `Timeline: ${formData.get("timeline") || ""}`,
+      `Source page: ${formData.get("sourcePage") || window.location.pathname}`,
+      "",
+      String(formData.get("message") || ""),
+    ].join("\n"),
+  );
+
+  return `mailto:roydiptopal1996@gmail.com?subject=${subject}&body=${body}`;
+}
+
+leadForms.forEach((form) => {
+  prefillLeadForm(form);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const statusNode = form.querySelector("[data-lead-status]");
+    const submitButton = form.querySelector('[type="submit"]');
+    const formData = new FormData(form);
+    const payload = Object.fromEntries(formData.entries());
+    const fallbackMailto = buildLeadFallbackMailto(formData);
+
+    if (statusNode) {
+      statusNode.textContent = "Submitting lead…";
+      statusNode.dataset.state = "loading";
+    }
+
+    if (submitButton instanceof HTMLButtonElement) {
+      submitButton.disabled = true;
+    }
+
+    try {
+      const response = await fetch("/api/leads", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Lead submission failed.");
+      }
+
+      if (statusNode) {
+        statusNode.textContent =
+          result.delivery?.mode === "email"
+            ? "Lead saved and notification email sent."
+            : `Lead saved. Email delivery is not configured here, so use the direct fallback if needed: ${fallbackMailto}`;
+        statusNode.dataset.state = "success";
+      }
+
+      form.reset();
+      prefillLeadForm(form);
+    } catch (error) {
+      if (statusNode) {
+        statusNode.textContent = `${error.message} Use direct email if needed: ${fallbackMailto}`;
+        statusNode.dataset.state = "error";
+      }
+    } finally {
+      if (submitButton instanceof HTMLButtonElement) {
+        submitButton.disabled = false;
+      }
+    }
+  });
+});
 
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -636,4 +623,5 @@ mountCompanyGraph(companyGraphRoot);
 mountVerifySME(verifySMERoot);
 mountTenderRadar(tenderRadarRoot);
 mountExportPulse(exportPulseRoot);
+mountJobSearch(jobSearchRoot);
 controlCenterRoots.forEach((root) => mountControlCenter(root));

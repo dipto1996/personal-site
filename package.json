@@ -1,0 +1,28 @@
+{
+  "name": "personal-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server/dev-server.js",
+    "vercel-build": "node scripts/build-static.mjs",
+    "serve": "python3 -m http.server 4173",
+    "sync:sources": "node server/run-source-sync.js",
+    "test": "node --test tests",
+    "prod:fetch": "node scripts/vercel-protected-fetch.mjs",
+    "prod:smoke": "node scripts/vercel-prod-smoke.mjs",
+    "demo:links": "node scripts/build-shareable-demo-links.mjs",
+    "jobs:collect": "node scripts/job-search-local-collector.mjs",
+    "jobs:model": "zsh scripts/start-job-search-llm.sh",
+    "jobs:worker": "node scripts/job-search-local-worker.mjs",
+    "jobs:install": "zsh scripts/install-job-search-local-services.sh"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "cheerio": "^1.0.0",
+    "dotenv": "^17.4.2",
+    "inngest": "^4.12.1",
+    "playwright-core": "^1.61.1",
+    "resend": "^6.9.4",
+    "zod": "^4.4.3"
+  }
+}

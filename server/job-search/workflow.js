@@ -1,0 +1,843 @@
+import { createHash } from "node:crypto";
+
+import { fetchConfiguredAtsJobs, validateDiscoveryCandidates } from "./ats.js";
+import { buildSearchPlan, getManualDiscoveryUrls } from "./discovery.js";
+import { TARGET_PROFILE } from "./profile.js";
+import {
+  callCriticModel,
+  callDeepModel,
+  callLocalModel,
+  callTriageModel,
+  callUtilityModel,
+  providerConfiguration,
+  searchBrave,
+  searchSerpApiJobs,
+} from "./providers.js";
+import {
+  addSnapshot,
+  countEvaluationsSince,
+  enqueueLocalTask,
+  getJob,
+  getCalibrationStatus,
+  getUsageSummary,
+  listCompanies,
+  listFeedbackExamples,
+  listJobs,
+  listTitleObservations,
+  listTitlePatterns,
+  recordDiscoveryLeads,
+  readResearchCache,
+  recordEvaluation,
+  recordObservation,
+  replaceClaims,
+  saveTitlePattern,
+  updateRun,
+  upsertCompany,
+  upsertJob,
+  writeResearchCache,
+} from "./repository.js";
+import {
+  criticSchema,
+  deepEvaluationSchema,
+  outreachSchema,
+  taxonomyProposalSchema,
+  triageBatchSchema,
+} from "./schemas.js";
+import {
+  buildAliasProposal,
+  classifyTitle,
+  evaluateProposalForPromotion,
+  normalizeTitle,
+} from "./taxonomy.js";
+import { classifyCandidateTitle } from "./title-ontology.js";
+import { rotatingWatchlistCompanies } from "./watchlist.js";
+
+const PROMPT_VERSION = "job-intelligence-2026-07-v1";
+
+function hash(...parts) {
+  return createHash("sha256").update(parts.join("|")).digest("hex");
+}
+
+function chunks(items, size) {
+  const result = [];
+  for (let index = 0; index < items.length; index += size) result.push(items.slice(index, index + size));
+  return result;
+}
+
+function uniqueJobs(jobs) {
+  const byKey = new Map();
+  jobs.forEach((job) => {
+    if (!job?.title || !job?.company || !job?.description) return;
+    const key = job.url || job.sourceId || hash(job.title, job.company, job.description.slice(0, 500));
+    const existing = byKey.get(key);
+    if (!existing || job.description.length > existing.description.length) byKey.set(key, job);
+  });
+  return [...byKey.values()];
+}
+
+function parsePostedAt(value) {
+  if (!value) return null;
+  const direct = new Date(value);
+  if (!Number.isNaN(direct.getTime())) return direct.toISOString();
+  const relative = String(value).match(/(\d+)\s+(minute|hour|day|week)s?\s+ago/i);
+  if (!relative) return null;
+  const unitMs = { minute: 60000, hour: 3600000, day: 86400000, week: 604800000 };
+  return new Date(Date.now() - Number(relative[1]) * unitMs[relative[2].toLowerCase()]).toISOString();
+}
+
+async function braveWithinQuota(query, options = {}) {
+  const usage = await getUsageSummary();
+  const cap = Number(process.env.JOBSEARCH_BRAVE_QUERIES_PER_MONTH || 950);
+  if ((usage.byProvider.brave?.requests || 0) >= cap) return { status: "quota_blocked", results: [] };
+  return searchBrave(query, options);
+}
+
+async function discover({ runId, trigger, slot = "morning", discoveryUrls = [] }) {
+  const plan = buildSearchPlan();
+  const queryHalf = Math.ceil(plan.serpQueries.length / 2);
+  const serpQueries = trigger === "manual"
+    ? []
+    : slot === "evening" ? plan.serpQueries.slice(queryHalf) : plan.serpQueries.slice(0, queryHalf);
+  const braveQueries = trigger === "manual"
+    ? []
+    : slot === "evening" ? plan.braveQueries.slice(3, 6) : plan.braveQueries.slice(0, 3);
+  const usage = await getUsageSummary();
+  const serpRemaining = Math.max(0, 250 - (usage.byProvider.serpapi?.requests || 0));
+  const serpSettled = await Promise.allSettled(serpQueries.slice(0, serpRemaining).map((query) => searchSerpApiJobs(query, { runId })));
+  const knownCompanies = trigger === "manual" ? [] : (await listCompanies(20)).slice(0, 2).map((company) => company.name);
+  const watchlistQueries = trigger === "manual" ? [] : [...new Set([...rotatingWatchlistCompanies(new Date(), 2), ...knownCompanies])]
+    .map((company) => `"${company}" (AI OR data OR analytics OR strategy OR product) (jobs OR careers)`);
+  const weeklyBackfill = trigger !== "manual" && slot === "morning" && new Date().getUTCDay() === 0
+    ? plan.serpQueries.slice(0, 4).map((query) => `${query.query} (jobs OR careers)`)
+    : [];
+  const braveSettled = [];
+  for (const query of braveQueries) {
+    try {
+      braveSettled.push({ status: "fulfilled", value: await braveWithinQuota(query.query, { runId, freshness: "pd" }) });
+    } catch (reason) {
+      braveSettled.push({ status: "rejected", reason });
+    }
+  }
+  const watchlistSettled = [];
+  for (const query of watchlistQueries) {
+    try {
+      watchlistSettled.push({ status: "fulfilled", value: await braveWithinQuota(query, { runId, freshness: "pw", count: 5 }) });
+    } catch (reason) {
+      watchlistSettled.push({ status: "rejected", reason });
+    }
+  }
+  const backfillSettled = [];
+  for (const query of weeklyBackfill) {
+    try {
+      backfillSettled.push({ status: "fulfilled", value: await braveWithinQuota(query, { runId, freshness: "pw", count: 10 }) });
+    } catch (reason) {
+      backfillSettled.push({ status: "rejected", reason });
+    }
+  }
+  const atsConfigured = await fetchConfiguredAtsJobs();
+
+  const serpJobs = serpSettled.flatMap((result) => result.status === "fulfilled" ? result.value.jobs : []);
+  const braveResults = [...braveSettled, ...watchlistSettled, ...backfillSettled]
+    .flatMap((result) => result.status === "fulfilled" ? result.value.results : [])
+    .filter((result) => /job|career|greenhouse|lever|ashby|workday|smartrecruiters/i.test(`${result.url} ${result.title}`))
+    .map((result) => ({
+      url: result.url,
+      title: result.title || "",
+      company: "",
+      location: "",
+      postedAt: null,
+      description: result.description || "",
+      sourceQuery: "brave_discovery",
+      sourceProvider: "brave",
+      raw: { searchResult: result },
+    }));
+  const manualCandidates = getManualDiscoveryUrls(discoveryUrls).map((url) => ({
+    url, sourceQuery: "manual_url", sourceProvider: "manual_url",
+  }));
+  const browserCandidates = [...manualCandidates, ...braveResults];
+  const validationCandidates = browserCandidates.filter((candidate) => {
+    if (candidate.sourceProvider === "manual_url") return true;
+    const titleMatch = classifyCandidateTitle(candidate.title);
+    return titleMatch.eligible || !candidate.title || /\b(job|jobs|career|careers)\b/i.test(candidate.title);
+  });
+  const validated = await validateDiscoveryCandidates(validationCandidates);
+  const jobs = uniqueJobs([...serpJobs, ...atsConfigured.jobs, ...validated.jobs]);
+  const rawLeads = [
+    ...serpJobs.map((job) => ({ ...job, status: "extracted" })),
+    ...atsConfigured.jobs.map((job) => ({ ...job, status: "extracted" })),
+    ...browserCandidates.map((candidate) => {
+      const ontology = classifyCandidateTitle(candidate.title);
+      return {
+        ...candidate,
+        status: candidate.sourceProvider === "manual_url"
+          ? "extraction_pending"
+          : !candidate.title ? "metadata_pending" : ontology.eligible ? "extraction_pending" : "filtered_title",
+        ontology,
+        snippet: candidate.description || candidate.raw?.searchResult?.description || "",
+      };
+    }),
+  ];
+  return {
+    jobs,
+    rawLeads,
+    providers: {
+      configuration: providerConfiguration(),
+      serpapi: { requested: serpQueries.length, completed: serpSettled.filter((item) => item.status === "fulfilled").length, remainingMonthly: serpRemaining },
+      brave: {
+        requested: braveQueries.length + watchlistQueries.length + weeklyBackfill.length,
+        completed: [...braveSettled, ...watchlistSettled, ...backfillSettled].filter((item) => item.status === "fulfilled").length,
+        weeklyBackfill: weeklyBackfill.length,
+      },
+      ats: atsConfigured.provider,
+      validation: validated.provider,
+    },
+  };
+}
+
+async function normalizeAndPersist(jobs) {
+  const patterns = await listTitlePatterns({ includeInactive: false });
+  const persisted = [];
+  for (const job of jobs) {
+    const title = classifyTitle(job.title, patterns);
+    const ontology = classifyCandidateTitle(job.title);
+    const routedFamilyId = title.familyId === "exploratory" && ontology.eligible
+      ? ontology.familyId
+      : title.familyId;
+    const contentHash = hash(job.title, job.company, job.location || "", job.description);
+    const existing = await getJob(job.sourceId);
+    const unchanged = existing?.contentHash === contentHash;
+    const record = await upsertJob({
+      ...existing,
+      ...job,
+      canonicalUrl: job.url,
+      normalizedTitle: title.normalizedTitle,
+      contentHash,
+      roleFamilyId: routedFamilyId,
+      status: unchanged ? existing.status : "triage_pending",
+      postedAt: parsePostedAt(job.postedAt),
+      details: {
+        ...(existing?.details || {}),
+        titleClassification: {
+          ...title,
+          familyId: routedFamilyId,
+          familyLabel: routedFamilyId === title.familyId ? title.familyLabel : "Broad function and seniority ontology",
+          lane: routedFamilyId === title.familyId ? title.lane : ontology.lane,
+          ontology,
+        },
+        sourceEvidence: [{
+          claimType: "job_posting",
+          value: "Source job description",
+          sourceUrl: job.url || "",
+          supportingPassage: job.description.slice(0, 600),
+          sourceDate: parsePostedAt(job.postedAt) || "",
+          confidence: 1,
+          evidenceType: "explicit",
+        }],
+      },
+    });
+    await addSnapshot(record.id, { contentHash, title: record.title, description: record.description, raw: job.raw || {} });
+    await recordObservation({
+      normalizedTitle: title.normalizedTitle,
+      rawTitle: job.title,
+      familyId: routedFamilyId === "exploratory" ? null : routedFamilyId,
+      matchedPatternId: title.matchedPatternId,
+      discoverySource: job.sourceProvider,
+    });
+    await upsertCompany({
+      name: record.company,
+      atsProvider: job.raw?.ats?.provider || "",
+      atsIdentifier: job.raw?.ats?.boardToken || job.raw?.ats?.company || job.raw?.ats?.tenant || "",
+      metadata: { lastDiscoverySource: job.sourceProvider },
+    });
+    if (!unchanged || ["triage_pending", "error"].includes(existing?.status)) persisted.push(record);
+  }
+  return persisted;
+}
+
+export async function persistExtractedJobs(jobs = []) {
+  return normalizeAndPersist(uniqueJobs(jobs));
+}
+
+function triageMessages(batch) {
+  return [
+    {
+      role: "system",
+      content: "You are a high-recall career screener. Return compact JSON only. Never reject uncertainty. Classify responsibilities, not keyword overlap. confidence is certainty in the relevance label: use 0.9+ only for clear decisions and 0.4-0.8 for uncertainty, never 0 when reasons are decisive. Keep scopeSummary under 25 words and reasons/unknowns to at most three short items each.",
+    },
+    {
+      role: "user",
+      content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nConstraints:\n${TARGET_PROFILE.avoid}\n${TARGET_PROFILE.targetGeography}\n\nEvaluate every job. Use relevance=irrelevant only for a clear function mismatch. A role mentioning Python, SQL, or engineering partnership is not automatically coding-heavy. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.\n\nJobs:\n${JSON.stringify(batch.map((job) => ({ sourceId: job.sourceId, title: job.title, company: job.company, location: job.location, description: job.description.slice(0, 4000) })), null, 2)}\n\nReturn {"jobs":[{"sourceId":"...","evaluation":{"roleFamilyId":"...","relevance":"relevant|uncertain|irrelevant","confidence":0.0,"scopeSummary":"...","codingIntensity":"low|medium|high|unknown","seniority":"too_junior|aligned|stretch|unknown","reasons":[],"unknowns":[]}}]}`,
+    },
+  ];
+}
+
+async function triageJobs(jobs, runId) {
+  const results = [];
+  for (const batch of chunks(jobs, 3)) {
+    const response = await callTriageModel({
+      messages: triageMessages(batch), schema: triageBatchSchema, runId,
+      operation: "triage", maxTokens: 1800,
+    });
+    if (!response.result) {
+      for (const job of batch) {
+        const updated = await upsertJob({
+          ...job,
+          status: "triage_pending",
+          details: { ...job.details, triageStatus: response.status, triageAttempts: response.attempts || [] },
+        });
+        results.push(updated);
+      }
+      continue;
+    }
+    const bySource = new Map(response.result.jobs.map((item) => [item.sourceId, item.evaluation]));
+    for (const job of batch) {
+      const evaluation = bySource.get(job.sourceId);
+      if (!evaluation) {
+        results.push(await upsertJob({ ...job, status: "triage_pending", details: { ...job.details, triageStatus: "missing_result" } }));
+        continue;
+      }
+      const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.9;
+      const status = reject ? "triage_rejected" : "deep_review_pending";
+      const updated = await upsertJob({
+        ...job,
+        roleFamilyId: evaluation.roleFamilyId || job.roleFamilyId,
+        status,
+        details: {
+          ...job.details,
+          triage: evaluation,
+          triageStatus: "complete",
+          triageProvider: response.provider,
+          triageModel: response.model,
+          triageAttempts: response.attempts || [],
+        },
+      });
+      await recordEvaluation({
+        jobId: job.id, runId, stage: "triage", provider: response.provider, model: response.model,
+        promptVersion: PROMPT_VERSION, verdict: evaluation.relevance, score: evaluation.confidence * 100,
+        output: evaluation, usage: response.usage,
+      });
+      results.push(updated);
+    }
+  }
+  return results;
+}
+
+async function researchJob(job, runId) {
+  const cacheKey = hash("company-role-research-v2", job.company, job.normalizedTitle || job.title);
+  const cached = await readResearchCache(cacheKey);
+  if (cached) return cached;
+  const queries = [
+    `"${job.company}" (visa sponsorship OR STEM OPT OR work authorization OR H-1B)`,
+    `"${job.company}" "${job.title}" (salary OR compensation OR interview)`,
+    `"${job.company}" (remote worldwide OR remote India OR employer of record OR contractor)`,
+    `"${job.company}" ("${job.title}" OR AI OR data) (recruiter OR "hiring manager" OR "Head of" OR VP)`,
+  ];
+  const results = [];
+  for (const query of queries) {
+    const response = await braveWithinQuota(query, { runId, freshness: "", count: 6 });
+    results.push(...response.results.map((item) => ({ ...item, query })));
+  }
+  const limitedResults = results.slice(0, 24);
+  const contactCandidates = limitedResults
+    .filter((item) => /recruiter|talent|hiring|head of|director|vice president|\bvp\b/i.test(`${item.title} ${item.description}`))
+    .slice(0, 6)
+    .map((item) => ({ nameOrTitle: item.title, url: item.url, evidence: item.description, source: "brave" }));
+  const research = { company: job.company, collectedAt: new Date().toISOString(), results: limitedResults, contactCandidates };
+  await writeResearchCache({ cacheKey, company: job.company, topic: "job_fit", result: research, ttlDays: 30 });
+  return research;
+}
+
+function deepMessages(job, research, examples) {
+  const compactResearch = (research?.results || []).slice(0, 10).map((item) => ({
+    title: item.title,
+    url: item.url,
+    description: String(item.description || "").slice(0, 700),
+    age: item.age || "",
+    query: item.query || "",
+  }));
+  return [
+    {
+      role: "system",
+      content: "You are a rigorous career strategist. Return JSON only. Ground every material fact in supplied evidence. Unknown must remain unknown.",
+    },
+    {
+      role: "user",
+      content: `Candidate:\n${TARGET_PROFILE.baseline}\n\nTarget geography: ${TARGET_PROFILE.targetGeography}\nCompensation: ${TARGET_PROFILE.compensation}\nAvoid: ${TARGET_PROFILE.avoid}\n\nJob:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 12000) }, null, 2)}\n\nWeb evidence:\n${JSON.stringify(compactResearch, null, 2)}\n\nPrior owner feedback in this role family:\n${JSON.stringify(examples.slice(0, 8), null, 2)}\n\nEvaluate role fit, financial-services advantage, AI/data relevance, leadership, coding/interview risk, location/authorization, compensation/upside, company quality, and interview velocity. Each dimension has score 0-5 and reasoning under 35 words. Scores measure attractiveness for this candidate: 5 is excellent/low risk and 0 is incompatible/high risk. Apply these hard rules: (1) if hands-on data engineering, software engineering, platform implementation, or production coding is the primary function, roleFit must be 0-2 and verdict must be pass; financial-services overlap cannot rescue it. (2) US on-site or hybrid work is incompatible with continuing from India unless the evidence explicitly offers global remote work; never infer remote eligibility from missing text. (3) explicit citizenship, clearance, or incompatible work authorization is a blocker. (4) do not infer coding interviews solely from technical requirements, but record high interview risk as inferred. (5) missing compensation, visa, remote, or interview facts remain unknown. Return verdict apply|maybe|pass, overallScore 0-100, a summary under 80 words, dimensions, no more than 10 material claims, no more than 5 red flags, 5 green flags, 6 unknowns, and a concise outreachAngle. Every explicit or inferred claim must quote a non-empty supportingPassage from supplied evidence and use its source URL. If no passage supports it, omit the claim or mark the fact unknown. Do not use model memory as evidence. Before finalizing, check that the verdict, dimension scores, red flags, and summary do not contradict each other.`
+    },
+  ];
+}
+
+function compareDeepCandidates(left, right) {
+  const relevance = { relevant: 2, uncertain: 1, irrelevant: 0 };
+  const lane = { title_family: 2, exploratory: 0 };
+  const coding = { low: 3, unknown: 2, medium: 1, high: 0 };
+  return (lane[right.details?.titleClassification?.lane] || 0) - (lane[left.details?.titleClassification?.lane] || 0)
+    || (relevance[right.details?.triage?.relevance] || 0) - (relevance[left.details?.triage?.relevance] || 0)
+    || (coding[right.details?.triage?.codingIntensity] || 0) - (coding[left.details?.triage?.codingIntensity] || 0)
+    || (Number(right.details?.triage?.confidence) || 0) - (Number(left.details?.triage?.confidence) || 0)
+    || new Date(right.postedAt || right.firstSeenAt || 0).getTime() - new Date(left.postedAt || left.firstSeenAt || 0).getTime();
+}
+
+async function deepEvaluateJobs(jobs, runId) {
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const maxDaily = Number(process.env.JOBSEARCH_DEEP_EVALUATIONS_PER_DAY || 8);
+  const usedToday = await countEvaluationsSince("deep", startOfDay.toISOString());
+  const available = Math.max(0, maxDaily - usedToday);
+  const candidates = jobs
+    .filter((job) => job.status === "deep_review_pending")
+    .sort(compareDeepCandidates)
+    .slice(0, available);
+  const evaluated = [];
+  for (const job of candidates) {
+    const research = await researchJob(job, runId);
+    const examples = await listFeedbackExamples(job.roleFamilyId);
+    const response = await callDeepModel({
+      messages: deepMessages(job, research, examples), schema: deepEvaluationSchema,
+      runId, operation: "deep_fit", maxTokens: 3500,
+    });
+    if (!response.result) {
+      evaluated.push(await upsertJob({
+        ...job,
+        status: "deep_review_pending",
+        details: { ...job.details, deepStatus: response.status, deepAttempts: response.attempts || [], research },
+      }));
+      continue;
+    }
+    const evaluation = await recordEvaluation({
+      jobId: job.id, runId, stage: "deep", provider: response.provider, model: response.model,
+      promptVersion: PROMPT_VERSION, verdict: response.result.verdict, score: response.result.overallScore,
+      output: response.result, usage: response.usage,
+    });
+    const claims = [
+      ...(job.details?.sourceEvidence || []),
+      ...response.result.claims,
+    ];
+    await replaceClaims(job.id, evaluation.id, claims);
+    const status = response.result.verdict === "apply" ? "critic_pending"
+      : response.result.verdict === "maybe" ? "needs_review" : "passed";
+    evaluated.push(await upsertJob({
+      ...job, status,
+      details: {
+        ...job.details, deepEvaluation: response.result, deepStatus: "complete",
+        deepProvider: response.provider, deepModel: response.model, deepAttempts: response.attempts || [], research, claims,
+        contactCandidates: research.contactCandidates || [],
+      },
+    }));
+  }
+  return evaluated;
+}
+
+async function selectDeepCandidates(jobIds, includeBacklog = true) {
+  const [current, backlog] = await Promise.all([
+    jobsForIds(jobIds),
+    includeBacklog ? listJobs({ view: "all", limit: 1000 }) : Promise.resolve([]),
+  ]);
+  const jobs = [...new Map([...current, ...backlog.filter((job) => job.status === "deep_review_pending")]
+    .map((job) => [job.id, job])).values()];
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const maxDaily = Number(process.env.JOBSEARCH_DEEP_EVALUATIONS_PER_DAY || 8);
+  const available = Math.max(0, maxDaily - await countEvaluationsSince("deep", startOfDay.toISOString()));
+  return jobs
+    .filter((job) => job.status === "deep_review_pending")
+    .sort(compareDeepCandidates)
+    .slice(0, available);
+}
+
+function criticMessages(job) {
+  const evidence = (job.details?.claims || []).slice(0, 12).map((claim) => ({
+    ...claim,
+    supportingPassage: String(claim.supportingPassage || "").slice(0, 500),
+  }));
+  return [
+    { role: "system", content: "Act as an independent skeptical career strategist. Return JSON only and use only supplied evidence. Prefer correcting an optimistic verdict over preserving model agreement." },
+    { role: "user", content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nJob and primary evaluation:\n${JSON.stringify({ title: job.title, company: job.company, description: job.description.slice(0, 8000), primary: job.details?.deepEvaluation, evidence }, null, 2)}\n\nIdentify unsupported claims, contradictions, hidden coding or eligibility risks, and whether apply|maybe|pass is justified. Treat claims with empty supporting passages as unsupported. A primarily hands-on data/software engineering role must be pass for this candidate. A US on-site/hybrid role is incompatible unless global remote evidence is explicit. Missing facts remain unknown. Return agrees, recommendedVerdict, confidence, objections, unsupportedClaims, summary under 100 words.` },
+  ];
+}
+
+async function criticJobs(jobs, runId) {
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const maxDaily = Number(process.env.JOBSEARCH_CRITIC_EVALUATIONS_PER_DAY || 5);
+  const available = Math.max(0, maxDaily - await countEvaluationsSince("critic", startOfDay.toISOString()));
+  const candidates = jobs.filter((job) => job.status === "critic_pending")
+    .sort((a, b) => (b.details?.deepEvaluation?.overallScore || 0) - (a.details?.deepEvaluation?.overallScore || 0))
+    .slice(0, available);
+  const reviewed = [];
+  const calibration = await getCalibrationStatus();
+  for (const job of candidates) {
+    const response = await callCriticModel({ messages: criticMessages(job), schema: criticSchema, runId, operation: "critic" });
+    if (!response.result) {
+      reviewed.push(await upsertJob({
+        ...job,
+        status: "needs_review",
+        details: { ...job.details, criticStatus: response.status, criticAttempts: response.attempts || [] },
+      }));
+      continue;
+    }
+    await recordEvaluation({
+      jobId: job.id, runId, stage: "critic", provider: response.provider, model: response.model,
+      promptVersion: PROMPT_VERSION, verdict: response.result.recommendedVerdict,
+      score: response.result.confidence * 100, output: response.result, usage: response.usage,
+    });
+    const primaryVerdict = job.details?.deepEvaluation?.verdict;
+    const disagreement = !response.result.agrees || response.result.recommendedVerdict !== primaryVerdict;
+    reviewed.push(await upsertJob({
+      ...job,
+      status: disagreement ? "needs_review"
+        : primaryVerdict === "apply" && calibration.active ? "shortlisted"
+          : primaryVerdict === "pass" ? "passed" : "needs_review",
+      details: {
+        ...job.details,
+        critic: response.result,
+        criticStatus: "complete",
+        criticProvider: response.provider,
+        criticModel: response.model,
+        criticAttempts: response.attempts || [],
+        modelAgreement: disagreement ? "disagree" : "agree",
+        autoShortlist: primaryVerdict === "apply" && !disagreement
+          ? { enabled: calibration.active, calibration }
+          : null,
+      },
+    }));
+  }
+  return reviewed;
+}
+
+async function selectCriticCandidates(jobIds, includeBacklog = true) {
+  const [current, backlog] = await Promise.all([
+    jobsForIds(jobIds),
+    includeBacklog ? listJobs({ view: "all", limit: 1000 }) : Promise.resolve([]),
+  ]);
+  const jobs = [...new Map([...current, ...backlog.filter((job) => job.status === "critic_pending")]
+    .map((job) => [job.id, job])).values()];
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const maxDaily = Number(process.env.JOBSEARCH_CRITIC_EVALUATIONS_PER_DAY || 5);
+  const available = Math.max(0, maxDaily - await countEvaluationsSince("critic", startOfDay.toISOString()));
+  return jobs.filter((job) => job.status === "critic_pending")
+    .sort((a, b) => (b.details?.deepEvaluation?.overallScore || 0) - (a.details?.deepEvaluation?.overallScore || 0))
+    .slice(0, available);
+}
+
+async function draftOutreach(job, runId) {
+  const result = await callUtilityModel({
+    runId, operation: "outreach", schema: outreachSchema, maxTokens: 500,
+    messages: [
+      { role: "system", content: "Write a concise truthful outreach note. Return JSON only. Do not invent facts or contacts." },
+      { role: "user", content: `Candidate is an AI product founder and former American Express Data Science Manager with $400M+ ML impact, financial-services depth, production RAG, governance, and data architecture experience.\n\nJob: ${JSON.stringify({ title: job.title, company: job.company, evaluation: job.details?.deepEvaluation, evidence: job.details?.claims }, null, 2)}\n\nReturn subject and a message under 170 words. Mention STEM OPT only as 36 months of current independent work authorization with no immediate sponsorship, never as permanent authorization.` },
+    ],
+  });
+  if (!result.result) return job;
+  return upsertJob({ ...job, details: { ...job.details, outreach: result.result } });
+}
+
+async function proposeTaxonomy(runId) {
+  const observations = await listTitleObservations({ unmatchedOnly: true, limit: 12 });
+  const patterns = await listTitlePatterns();
+  const jobs = await listJobs({ view: "all", limit: 1000 });
+  const labelled = jobs.filter((job) => job.disposition);
+  const proposals = [];
+  for (const observation of observations) {
+    if (patterns.some((pattern) => pattern.expression === observation.normalizedTitle)) continue;
+    const response = await callUtilityModel({
+      runId, operation: "taxonomy_proposal", schema: taxonomyProposalSchema, maxTokens: 500,
+      messages: [
+        { role: "system", content: "Map a job title to the candidate's role taxonomy. Return JSON only. Do not write regex." },
+        { role: "user", content: `Title: ${observation.rawTitle}\nAllowed families: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership. Return familyId, familyLabel, confidence, rationale. If no family is appropriate, use familyId=exploratory.` },
+      ],
+    });
+    if (!response.result || response.result.familyId === "exploratory") continue;
+    const proposal = buildAliasProposal({
+      title: observation.rawTitle,
+      familyId: response.result.familyId,
+      familyLabel: response.result.familyLabel,
+      confidence: response.result.confidence,
+    });
+    if (!proposal) continue;
+    proposal.supportCount = observation.occurrenceCount;
+    proposal.metrics = { ...proposal.metrics, rationale: response.result.rationale };
+    const assessment = evaluateProposalForPromotion(proposal, labelled);
+    proposal.metrics = { ...proposal.metrics, ...assessment };
+    proposal.status = assessment.autoPromote ? "active" : "proposed";
+    proposals.push(await saveTitlePattern(proposal));
+  }
+  return proposals;
+}
+
+async function jobsForIds(jobIds = []) {
+  const jobs = [];
+  for (const jobId of jobIds) {
+    const job = await getJob(jobId);
+    if (job) jobs.push(job);
+  }
+  return jobs;
+}
+
+export async function runDiscoveryStage({ runId, trigger, slot, discoveryUrls }) {
+  const discovered = await discover({ runId, trigger, slot, discoveryUrls });
+  const leads = await recordDiscoveryLeads(discovered.rawLeads.map((lead) => ({ ...lead, runId })));
+  const changed = await normalizeAndPersist(discovered.jobs);
+  return {
+    jobIds: changed.map((job) => job.id),
+    discoveredCount: leads.length,
+    extractedCount: discovered.jobs.length,
+    changedCount: changed.length,
+    providers: discovered.providers,
+  };
+}
+
+export async function runTriageStage({ runId, jobIds }) {
+  const jobs = await jobsForIds(jobIds);
+  const triaged = await triageJobs(jobs, runId);
+  return { jobIds: triaged.map((job) => job.id), triagedCount: triaged.length };
+}
+
+export async function enqueueJobsForLocalProcessing({ runId = null, jobIds = [] }) {
+  const jobs = await jobsForIds(jobIds);
+  const queued = [];
+  for (const job of jobs) {
+    const revision = `${job.contentHash}:${PROMPT_VERSION}`;
+    const taskType = job.details?.triageStatus === "complete" ? "deep" : "triage";
+    const task = await enqueueLocalTask({
+      jobId: job.id,
+      taskType,
+      priority: taskType === "triage" ? 100 : 80,
+      revision: `${revision}:${taskType}`,
+      payload: { sourceId: job.sourceId, runId },
+    });
+    queued.push(task);
+    await upsertJob({
+      ...job,
+      status: taskType === "triage" ? "local_triage_pending" : "deep_review_pending",
+      details: {
+        ...job.details,
+        localQueue: { status: "queued", taskId: task.id, taskType, queuedAt: new Date().toISOString() },
+      },
+    });
+  }
+  return { queuedCount: queued.length, taskIds: queued.map((task) => task.id) };
+}
+
+export async function selectDeepJobIds({ jobIds, includeBacklog = true }) {
+  return (await selectDeepCandidates(jobIds, includeBacklog)).map((job) => job.id);
+}
+
+export async function runDeepStage({ runId, jobIds, includeBacklog = true }) {
+  const [current, backlog] = await Promise.all([
+    jobsForIds(jobIds),
+    includeBacklog ? listJobs({ view: "all", limit: 1000 }) : Promise.resolve([]),
+  ]);
+  const jobs = [...new Map([...current, ...backlog.filter((job) => job.status === "deep_review_pending")]
+    .map((job) => [job.id, job])).values()];
+  const evaluated = await deepEvaluateJobs(jobs, runId);
+  return {
+    jobIds: evaluated.map((job) => job.id),
+    evaluatedCount: evaluated.filter((job) => job.details?.deepStatus === "complete").length,
+    blockedCount: evaluated.filter((job) => job.details?.deepStatus && job.details.deepStatus !== "complete").length,
+  };
+}
+
+export async function selectCriticJobIds({ jobIds, includeBacklog = true }) {
+  return (await selectCriticCandidates(jobIds, includeBacklog)).map((job) => job.id);
+}
+
+export async function runCriticStage({ runId, jobIds, includeBacklog = true }) {
+  const [current, backlog] = await Promise.all([
+    jobsForIds(jobIds),
+    includeBacklog ? listJobs({ view: "all", limit: 1000 }) : Promise.resolve([]),
+  ]);
+  const jobs = [...new Map([...current, ...backlog.filter((job) => job.status === "critic_pending")]
+    .map((job) => [job.id, job])).values()];
+  const reviewed = await criticJobs(jobs, runId);
+  return {
+    jobIds: reviewed.map((job) => job.id),
+    reviewedCount: reviewed.filter((job) => job.details?.criticStatus === "complete").length,
+    blockedCount: reviewed.filter((job) => job.details?.criticStatus && job.details.criticStatus !== "complete").length,
+    shortlistIds: reviewed.filter((job) => job.status === "shortlisted").map((job) => job.id),
+  };
+}
+
+export async function runOutreachStage({ runId, jobIds }) {
+  const [current, shortlist] = await Promise.all([jobsForIds(jobIds), listJobs({ view: "shortlist", limit: 1000 })]);
+  const jobs = [...new Map([...current, ...shortlist.filter((job) => !job.details?.outreach)]
+    .map((job) => [job.id, job])).values()];
+  for (const job of jobs) await draftOutreach(job, runId);
+  return { draftedCount: jobs.length };
+}
+
+export async function runTaxonomyStage({ runId, slot }) {
+  if (slot !== "evening") return { proposalCount: 0 };
+  return { proposalCount: (await proposeTaxonomy(runId)).length };
+}
+
+export async function runLocalTriageEvaluation({ jobId, runId = null }) {
+  const job = await getJob(jobId);
+  if (!job) throw new Error(`Job ${jobId} was not found.`);
+  const response = await callLocalModel({
+    stage: "triage", messages: triageMessages([job]), schema: triageBatchSchema,
+    runId, operation: "local_triage", maxTokens: 1400,
+  });
+  const evaluation = response.result?.jobs?.find((item) => item.sourceId === job.sourceId)?.evaluation;
+  if (!evaluation) throw new Error(`Local triage failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
+  const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.9;
+  const updated = await upsertJob({
+    ...job,
+    roleFamilyId: evaluation.roleFamilyId || job.roleFamilyId,
+    status: reject ? "triage_rejected" : "deep_review_pending",
+    details: {
+      ...job.details, triage: evaluation, triageStatus: "complete",
+      triageProvider: response.provider, triageModel: response.model,
+      triageAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
+    },
+  });
+  await recordEvaluation({
+    jobId: job.id, runId, stage: "triage", provider: response.provider, model: response.model,
+    promptVersion: PROMPT_VERSION, verdict: evaluation.relevance, score: evaluation.confidence * 100,
+    output: evaluation, usage: response.usage,
+  });
+  return updated;
+}
+
+export async function runLocalDeepEvaluation({ jobId, runId = null }) {
+  const job = await getJob(jobId);
+  if (!job) throw new Error(`Job ${jobId} was not found.`);
+  const research = job.details?.research || {
+    company: job.company,
+    collectedAt: new Date().toISOString(),
+    results: [],
+    contactCandidates: [],
+    status: "direct_evidence_only",
+  };
+  const examples = await listFeedbackExamples(job.roleFamilyId);
+  const response = await callLocalModel({
+    stage: "deep", messages: deepMessages(job, research, examples), schema: deepEvaluationSchema,
+    runId, operation: "local_deep_fit", maxTokens: 3500,
+  });
+  if (!response.result) throw new Error(`Local deep evaluation failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
+  const evaluation = await recordEvaluation({
+    jobId: job.id, runId, stage: "deep", provider: response.provider, model: response.model,
+    promptVersion: PROMPT_VERSION, verdict: response.result.verdict, score: response.result.overallScore,
+    output: response.result, usage: response.usage,
+  });
+  const claims = [...(job.details?.sourceEvidence || []), ...response.result.claims];
+  await replaceClaims(job.id, evaluation.id, claims);
+  const status = response.result.verdict === "apply" ? "critic_pending"
+    : response.result.verdict === "maybe" ? "needs_review" : "passed";
+  return upsertJob({
+    ...job,
+    status,
+    details: {
+      ...job.details, deepEvaluation: response.result, deepStatus: "complete",
+      deepProvider: response.provider, deepModel: response.model,
+      deepAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
+      research, claims, contactCandidates: research.contactCandidates || [],
+    },
+  });
+}
+
+export async function runLocalCriticEvaluation({ jobId, runId = null }) {
+  const job = await getJob(jobId);
+  if (!job) throw new Error(`Job ${jobId} was not found.`);
+  if (!job.details?.deepEvaluation) throw new Error(`Job ${jobId} has no deep evaluation to criticise.`);
+  const response = await callLocalModel({
+    stage: "critic", messages: criticMessages(job), schema: criticSchema,
+    runId, operation: "local_critic", maxTokens: 1200,
+  });
+  if (!response.result) throw new Error(`Local critic failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
+  await recordEvaluation({
+    jobId: job.id, runId, stage: "critic", provider: response.provider, model: response.model,
+    promptVersion: PROMPT_VERSION, verdict: response.result.recommendedVerdict,
+    score: response.result.confidence * 100, output: response.result, usage: response.usage,
+  });
+  const primaryVerdict = job.details.deepEvaluation.verdict;
+  const disagreement = !response.result.agrees || response.result.recommendedVerdict !== primaryVerdict;
+  const calibration = await getCalibrationStatus();
+  return upsertJob({
+    ...job,
+    status: disagreement ? "needs_review"
+      : primaryVerdict === "apply" && calibration.active ? "shortlisted"
+        : primaryVerdict === "pass" ? "passed" : "needs_review",
+    details: {
+      ...job.details, critic: response.result, criticStatus: "complete",
+      criticProvider: response.provider, criticModel: response.model,
+      criticAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
+      modelAgreement: disagreement ? "disagree" : "agree",
+      autoShortlist: primaryVerdict === "apply" && !disagreement
+        ? { enabled: calibration.active, calibration }
+        : null,
+    },
+  });
+}
+
+export async function runLocalOutreachDraft({ jobId, runId = null }) {
+  const job = await getJob(jobId);
+  if (!job) throw new Error(`Job ${jobId} was not found.`);
+  const response = await callLocalModel({
+    stage: "utility", runId, operation: "local_outreach", schema: outreachSchema, maxTokens: 600,
+    messages: [
+      { role: "system", content: "Write a concise truthful outreach note. Return JSON only. Do not invent facts or contacts." },
+      { role: "user", content: `Candidate is an AI product founder and former American Express Data Science Manager with $400M+ ML impact, financial-services depth, production RAG, governance, and data architecture experience.\n\nJob: ${JSON.stringify({ title: job.title, company: job.company, evaluation: job.details?.deepEvaluation, evidence: job.details?.claims }, null, 2)}\n\nReturn subject and a message under 170 words. Mention work authorization only when supported by the candidate profile; do not imply permanent authorization.` },
+    ],
+  });
+  if (!response.result) throw new Error(`Local outreach drafting failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
+  return upsertJob({ ...job, details: { ...job.details, outreach: response.result } });
+}
+
+export async function executeJobSearchRun({ runId, trigger = "manual", slot = "morning", discoveryUrls = [] } = {}) {
+  const stats = { discovered: 0, changed: 0, triaged: 0, deepEvaluated: 0, criticised: 0, shortlisted: 0, taxonomyProposals: 0, localQueued: 0 };
+  const errors = [];
+  let providers = {};
+  try {
+    await updateRun(runId, { status: "running", phase: "discovery", stats });
+    const discovery = await runDiscoveryStage({ runId, trigger, slot, discoveryUrls });
+    providers = discovery.providers;
+    stats.discovered = discovery.discoveredCount;
+    stats.changed = discovery.changedCount;
+
+    if (process.env.JOBSEARCH_LOCAL_WORKER_ENABLED === "true") {
+      const local = await enqueueJobsForLocalProcessing({ runId, jobIds: discovery.jobIds });
+      stats.localQueued = local.queuedCount;
+      return updateRun(runId, {
+        status: "completed", phase: "queued_local", stats,
+        providers: { ...providers, local: { status: "queued", queued: local.queuedCount } },
+        errors,
+      });
+    }
+
+    await updateRun(runId, { status: "running", phase: "triage", stats, providers });
+    const triage = await runTriageStage({ runId, jobIds: discovery.jobIds });
+    stats.triaged = triage.triagedCount;
+
+    await updateRun(runId, { status: "running", phase: "deep_evaluation", stats, providers });
+    const deep = await runDeepStage({ runId, jobIds: triage.jobIds });
+    stats.deepEvaluated = deep.evaluatedCount;
+
+    await updateRun(runId, { status: "running", phase: "criticism", stats, providers });
+    const reviewed = await runCriticStage({ runId, jobIds: deep.jobIds });
+    stats.criticised = reviewed.reviewedCount;
+    await runOutreachStage({ runId, jobIds: reviewed.shortlistIds });
+    stats.shortlisted = reviewed.shortlistIds.length;
+
+    if (slot === "evening") {
+      await updateRun(runId, { status: "running", phase: "taxonomy", stats, providers });
+      stats.taxonomyProposals = (await runTaxonomyStage({ runId, slot })).proposalCount;
+    }
+
+    const config = providerConfiguration();
+    const requiredMissing = ["serpapi", "brave", "tavily"].filter((key) => !config[key]);
+    if (!["groq", "cloudflare", "openrouter", "zai"].some((key) => config[key])) requiredMissing.push("model_router");
+    const modelBlocked = deep.blockedCount + reviewed.blockedCount;
+    const status = requiredMissing.length || modelBlocked ? "partial" : "completed";
+    if (requiredMissing.length) errors.push({ stage: "configuration", message: `Missing providers: ${requiredMissing.join(", ")}` });
+    if (modelBlocked) errors.push({ stage: "models", message: `${modelBlocked} model evaluations exhausted configured free routes or quotas.` });
+    return updateRun(runId, { status, phase: "complete", stats, providers, errors });
+  } catch (error) {
+    errors.push({ stage: "pipeline", message: error.message || "Pipeline failed." });
+    await updateRun(runId, { status: "failed", phase: "failed", stats, providers, errors });
+    throw error;
+  }
+}
+
+export { PROMPT_VERSION };

@@ -1,0 +1,10 @@
+{
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "crons": [
+    {
+      "path": "/api/cron/source-sync",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}

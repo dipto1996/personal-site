@@ -1,0 +1,18 @@
+{
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "buildCommand": "npm run vercel-build",
+  "outputDirectory": "public",
+  "rewrites": [
+    {
+      "source": "/api/((?!inngest(?:/|$)).*)",
+      "destination": "/api/index"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/source-sync",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}

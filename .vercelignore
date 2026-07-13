@@ -1,0 +1,9 @@
+.git
+.vercel
+.data
+.env
+.env.*
+node_modules
+tmp
+.DS_Store
+public

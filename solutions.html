@@ -3,161 +3,42 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Solutions | Diptopal Roy</title>
+    <title>TradeGraph Redirect | Diptopal Roy</title>
     <meta
       name="description"
-      content="Current product surfaces by Diptopal Roy across supplier diligence, procurement, and export workflows."
+      content="Legacy TradeGraph solutions route. Redirecting to the product-first TradeGraph subsite."
     />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
+    <meta http-equiv="refresh" content="0; url=./tradegraph/index.html" />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body data-page="solutions">
-    <div class="site-shell">
-      <header class="topbar">
-        <a class="brand" href="./index.html">Diptopal Roy</a>
-        <nav class="nav">
-          <a href="./about.html" data-page-target="about">About</a>
-          <a href="./work.html" data-page-target="work">Work</a>
-          <a href="./dashboards.html" data-page-target="dashboards">Dashboards</a>
-          <a href="./solutions.html" data-page-target="solutions">Solutions</a>
-          <a href="./experience.html" data-page-target="experience">Experience</a>
-          <a href="./writing.html" data-page-target="writing">Writing</a>
-          <a href="./contact.html" data-page-target="contact">Contact</a>
-        </nav>
-        <a class="nav-cta" href="mailto:roydiptopal1996@gmail.com">Get in touch</a>
-      </header>
-
-      <main class="page-stack">
-        <section class="page-hero">
-          <div class="page-hero-copy">
-            <p class="eyebrow">Solutions</p>
-            <h1>Current product surfaces for trust, procurement, and expansion workflows.</h1>
-            <p>
-              These modules sit inside a personal site as evidence of product
-              thinking and execution. The point is to show how the systems fit
-              together, not to turn the homepage into a generic product funnel.
-            </p>
+  <body data-page="tradegraph">
+    <script>
+      (function () {
+        const hash = window.location.hash.replace(/^#/, "");
+        const routes = {
+          "verifysme-workspace": "./tradegraph/app/verifysme/queue.html",
+          "exportpulse-workspace": "./tradegraph/app/exportpulse/route-pipeline.html",
+        };
+        const target = routes[hash] || "./tradegraph/index.html";
+        window.location.replace(target);
+      })();
+    </script>
+    <main class="page-stack">
+      <section class="page-hero">
+        <div class="page-hero-copy">
+          <p class="eyebrow">TradeGraph</p>
+          <h1>Redirecting to the product-first TradeGraph subsite.</h1>
+          <p>
+            The old `Solutions` surface has been replaced by a dedicated TradeGraph tree with separate
+            use-case pages, product pages, and app pages.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="./tradegraph/index.html">Open TradeGraph</a>
+            <a class="button button-secondary" href="./tradegraph/app/verifysme/queue.html">Open VerifySME</a>
           </div>
-          <div class="page-hero-grid">
-            <article class="page-hero-card">
-              <strong>Verify suppliers</strong>
-              <p>Inspect source-backed trust, evidence depth, and commercial readiness before the first call.</p>
-            </article>
-            <article class="page-hero-card">
-              <strong>Connect workflows</strong>
-              <p>Open the dashboard layer when the same company needs a bid or no-bid answer under tighter operating pressure.</p>
-            </article>
-            <article class="page-hero-card">
-              <strong>Plan route entry</strong>
-              <p>ExportPulse turns supplier readiness into route plans, blockers, and next 30-day actions.</p>
-            </article>
-          </div>
-        </section>
-
-        <section class="product-jump-section">
-          <div class="product-jump-bar">
-            <a class="product-jump-link" href="#verifysme-workspace">
-              <span>Suppliers</span>
-              <strong>VerifySME</strong>
-            </a>
-            <a class="product-jump-link" href="./dashboards.html#tenderradar-workspace">
-              <span>Tenders</span>
-              <strong>TenderRadar</strong>
-            </a>
-            <a class="product-jump-link" href="#exportpulse-workspace">
-              <span>Exports</span>
-              <strong>ExportPulse</strong>
-            </a>
-          </div>
-          <div class="proof-strip">
-            <article class="proof-card">
-              <span>Shared model</span>
-              <strong>One evidence layer reused across supplier, tender, and export decisions</strong>
-            </article>
-            <article class="proof-card">
-              <span>Evidence model</span>
-              <strong>Official registries, public portals, and inspectable workflow artifacts</strong>
-            </article>
-            <article class="proof-card">
-              <span>Why it matters</span>
-              <strong>These surfaces demonstrate product logic, not just visual polish</strong>
-            </article>
-          </div>
-        </section>
-
-        <section class="section" id="verifysme-workspace">
-          <div class="section-shell">
-            <div class="section-heading">
-              <p class="eyebrow">VerifySME</p>
-              <h2>Buyer-side supplier diligence with source-backed signals.</h2>
-              <p class="section-intro">
-                VerifySME is designed for sourcing teams that need a credible
-                first-pass diligence layer before they start calls, samples, or
-                RFQs. On this site, it also serves as proof that I can make
-                trust-heavy product decisions concrete.
-              </p>
-            </div>
-            <div data-verifysme-app></div>
-          </div>
-        </section>
-
-        <section class="section" id="exportpulse-workspace">
-          <div class="section-shell">
-            <div class="section-heading">
-              <p class="eyebrow">ExportPulse</p>
-              <h2>Route-by-route export readiness for the same supplier graph.</h2>
-              <p class="section-intro">
-                ExportPulse starts with the supplier evidence layer from VerifySME
-                and turns market-entry planning into a route, blocker, and next-action
-                workflow instead of another static market note.
-              </p>
-            </div>
-            <div data-exportpulse-app></div>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="section-shell">
-            <div class="section-heading">
-              <p class="eyebrow">Ops Layer</p>
-              <h2>Control the shared workspace behind VerifySME and ExportPulse.</h2>
-              <p class="section-intro">
-                Save alert rules, inspect runtime readiness, and change plan state without
-                leaving the product suite. TenderRadar uses the same workspace controls on the dashboards page.
-              </p>
-            </div>
-            <div data-control-center-app></div>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="section-shell section-shell-split">
-            <div class="section-heading">
-              <p class="eyebrow">What This Shows</p>
-              <h2>One reusable logic layer behind multiple products.</h2>
-            </div>
-            <ul class="strength-list">
-              <li>VerifySME qualifies the company.</li>
-              <li>TenderRadar qualifies the demand opportunity.</li>
-              <li>ExportPulse qualifies the market-entry route.</li>
-              <li>Together they show how one product thesis can produce multiple coherent surfaces.</li>
-            </ul>
-          </div>
-        </section>
-      </main>
-
-      <footer class="footer">
-        <p>Diptopal Roy. Technical depth, business judgment, operator bias.</p>
-        <p>&copy; <span data-year></span></p>
-      </footer>
-    </div>
-
-    <script type="module" src="./script.js"></script>
+        </div>
+      </section>
+    </main>
   </body>
 </html>

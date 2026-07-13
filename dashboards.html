@@ -3,147 +3,41 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dashboards | Diptopal Roy</title>
+    <title>TradeGraph App Redirect | Diptopal Roy</title>
     <meta
       name="description"
-      content="Interactive dashboard surfaces by Diptopal Roy, shown as product proof inside a personal site."
+      content="Legacy TradeGraph dashboards route. Redirecting to the TradeGraph app overview."
     />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
+    <meta http-equiv="refresh" content="0; url=./tradegraph/app/overview.html" />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body data-page="dashboards">
-    <div class="site-shell">
-      <header class="topbar">
-        <a class="brand" href="./index.html">Diptopal Roy</a>
-        <nav class="nav">
-          <a href="./about.html" data-page-target="about">About</a>
-          <a href="./work.html" data-page-target="work">Work</a>
-          <a href="./dashboards.html" data-page-target="dashboards">Dashboards</a>
-          <a href="./solutions.html" data-page-target="solutions">Solutions</a>
-          <a href="./experience.html" data-page-target="experience">Experience</a>
-          <a href="./writing.html" data-page-target="writing">Writing</a>
-          <a href="./contact.html" data-page-target="contact">Contact</a>
-        </nav>
-        <a class="nav-cta" href="mailto:roydiptopal1996@gmail.com">Get in touch</a>
-      </header>
-
-      <main class="page-stack">
-        <section class="page-hero">
-          <div class="page-hero-copy">
-            <p class="eyebrow">Dashboards</p>
-            <h1>Interactive product dashboards, shown here as proof of work.</h1>
-            <p>
-              This page is intentionally deeper in the funnel. It is for
-              visitors who already understand the profile and now want to
-              inspect how the product thinking shows up in a working surface.
-            </p>
+  <body data-page="tradegraph">
+    <script>
+      (function () {
+        const hash = window.location.hash.replace(/^#/, "");
+        const routes = {
+          "tenderradar-workspace": "./tradegraph/app/tenderradar/pipeline.html",
+        };
+        const target = routes[hash] || "./tradegraph/app/overview.html";
+        window.location.replace(target);
+      })();
+    </script>
+    <main class="page-stack">
+      <section class="page-hero">
+        <div class="page-hero-copy">
+          <p class="eyebrow">TradeGraph App</p>
+          <h1>Redirecting to the TradeGraph app shell.</h1>
+          <p>
+            The old `Dashboards` route has been replaced by a dedicated app tree with an overview page,
+            product-specific workspaces, and ops views.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="./tradegraph/app/overview.html">Open app overview</a>
+            <a class="button button-secondary" href="./tradegraph/app/tenderradar/pipeline.html">Open TenderRadar</a>
           </div>
-          <div class="page-hero-grid">
-            <article class="page-hero-card">
-              <strong>Working surface</strong>
-              <p>These are not static mocks. The point is to make product judgment visible inside an interactive interface.</p>
-            </article>
-            <article class="page-hero-card">
-              <strong>Decision support</strong>
-              <p>The dashboards are structured around calls a user actually has to make, not vanity metrics.</p>
-            </article>
-            <article class="page-hero-card">
-              <strong>Product proof</strong>
-              <p>On a personal site, this page should demonstrate build quality and systems thinking, not replace the personal narrative.</p>
-            </article>
-          </div>
-        </section>
-
-        <section class="product-jump-section">
-          <div class="product-jump-bar">
-            <a class="product-jump-link" href="#tenderradar-workspace">
-              <span>Tenders</span>
-              <strong>TenderRadar</strong>
-            </a>
-            <a class="product-jump-link" href="./solutions.html#verifysme-workspace">
-              <span>Suppliers</span>
-              <strong>VerifySME</strong>
-            </a>
-            <a class="product-jump-link" href="./solutions.html#exportpulse-workspace">
-              <span>Exports</span>
-              <strong>ExportPulse</strong>
-            </a>
-          </div>
-          <div class="proof-strip">
-            <article class="proof-card">
-              <span>Core job</span>
-              <strong>Bid qualification with visible thresholds, not dashboard theater</strong>
-            </article>
-            <article class="proof-card">
-              <span>What to inspect</span>
-              <strong>How the interface drives a concrete decision rather than just displaying data</strong>
-            </article>
-            <article class="proof-card">
-              <span>Connected workflow</span>
-              <strong>Supplier diligence, procurement judgment, and route planning share one operating logic</strong>
-            </article>
-          </div>
-        </section>
-
-        <section class="section" id="tenderradar-workspace">
-          <div class="section-shell">
-            <div class="section-heading">
-              <p class="eyebrow">TenderRadar Workspace</p>
-              <h2>Bid qualification with a live review queue.</h2>
-              <p class="section-intro">
-                The workspace is built around one customer decision: pursue,
-                qualify, partner, or walk away. That is the right standard for
-                product proof on a personal site too.
-              </p>
-            </div>
-            <div data-tenderradar-app></div>
-            <div class="subtle-grid subtle-grid-three" data-dashboard-grid></div>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="section-shell">
-            <div class="section-heading">
-              <p class="eyebrow">Shared Ops Layer</p>
-              <h2>Workspace control center for alerts, plan state, and source sync.</h2>
-              <p class="section-intro">
-                This is the operating layer behind the product suite: workspace membership,
-                saved alerts, live-source refresh, and plan controls all sit
-                here instead of being hidden behind a fake demo shell.
-              </p>
-            </div>
-            <div data-control-center-app></div>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="section-shell section-shell-split">
-            <div class="section-heading">
-              <p class="eyebrow">Why It Belongs Here</p>
-              <h2>What this page should prove about the work.</h2>
-            </div>
-            <ul class="strength-list">
-              <li>The interface is anchored in a real operational decision.</li>
-              <li>The logic is visible enough to inspect, not just admire visually.</li>
-              <li>The product can connect data, workflow, and action in one surface.</li>
-              <li>The build is credible evidence of how I think, not a detached demo artifact.</li>
-            </ul>
-          </div>
-        </section>
-      </main>
-
-      <footer class="footer">
-        <p>Diptopal Roy. Technical depth, business judgment, operator bias.</p>
-        <p>&copy; <span data-year></span></p>
-      </footer>
-    </div>
-
-    <script type="module" src="./script.js"></script>
+        </div>
+      </section>
+    </main>
   </body>
 </html>

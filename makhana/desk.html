@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Makhanamart Lead Desk</title>
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="theme-color" content="#f4eee4" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="desk">
+    <div class="site-backdrop site-backdrop-trade"></div>
+
+    <div class="site-shell">
+      <header class="topbar" data-topbar>
+        <a class="brand" href="./" aria-label="Makhanamart home">
+          <span class="brand-mark">
+            <img src="./assets/brand/mark.svg" alt="" />
+          </span>
+          <span class="brand-copy">
+            <span class="brand-kicker">Malda, West Bengal</span>
+            <span class="brand-name" data-brand-name>Makhanamart</span>
+          </span>
+        </a>
+
+        <button class="menu-toggle" type="button" aria-expanded="false" aria-label="Toggle navigation" data-menu-toggle>
+          <span></span>
+          <span></span>
+        </button>
+
+        <nav class="nav" aria-label="Primary" data-nav>
+          <a href="./" data-nav-page="home">Home</a>
+          <a href="./trade" data-nav-page="trade">Trade</a>
+          <a href="./desk" data-nav-page="desk">Lead Desk</a>
+        </nav>
+
+        <div class="topbar-actions">
+          <a class="button button-primary button-compact" href="./trade#buyer-form">Open trade form</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="page-hero page-hero-trade reveal">
+          <div class="hero-copy wide-copy">
+            <p class="eyebrow">Internal Lead Desk</p>
+            <h1>Review buyer and seller inquiries in one place.</h1>
+            <p class="lead">
+              This page is intended for internal use. It reads recent
+              submissions from the Makhanamart lead endpoint and summarizes
+              buyer and seller activity.
+            </p>
+          </div>
+        </section>
+
+        <section class="section reveal">
+          <div class="desk-layout">
+            <article class="story-card desk-panel">
+              <p class="eyebrow">Access</p>
+              <h3>Enter the dashboard key.</h3>
+              <form class="desk-access-form" data-desk-access-form>
+                <label>
+                  Dashboard key
+                  <input
+                    data-desk-access-input
+                    type="password"
+                    placeholder="Enter the access key"
+                    autocomplete="current-password"
+                    required
+                  />
+                </label>
+                <div class="desk-actions">
+                  <button class="button button-primary" type="submit">Load desk</button>
+                  <button class="button button-secondary" type="button" data-desk-refresh>Refresh</button>
+                  <button class="button button-secondary" type="button" data-desk-clear>Clear key</button>
+                </div>
+                <p class="form-status" data-desk-access-message aria-live="polite"></p>
+              </form>
+            </article>
+
+            <article class="story-card desk-panel">
+              <p class="eyebrow">Status</p>
+              <h3 data-desk-status-title>Not connected yet.</h3>
+              <p class="section-intro" data-desk-status-copy>
+                Enter the dashboard key to load recent inquiries.
+              </p>
+              <p class="desk-note">
+                For production use, set `MAKHANAMART_DASHBOARD_KEY` in the
+                environment before opening this page.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section reveal" data-desk-summary-section hidden>
+          <div class="section-head">
+            <p class="eyebrow">Summary</p>
+            <h2>Recent inquiry activity.</h2>
+          </div>
+
+          <div class="summary-grid">
+            <article class="summary-card">
+              <span>Total leads</span>
+              <strong data-summary-total>0</strong>
+            </article>
+            <article class="summary-card">
+              <span>Buyer inquiries</span>
+              <strong data-summary-buyers>0</strong>
+            </article>
+            <article class="summary-card">
+              <span>Seller inquiries</span>
+              <strong data-summary-sellers>0</strong>
+            </article>
+            <article class="summary-card">
+              <span>Last inquiry</span>
+              <strong data-summary-last>No leads yet</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="section reveal" data-desk-table-section hidden>
+          <div class="section-head">
+            <p class="eyebrow">Recent Leads</p>
+            <h2>Buyer and seller requests.</h2>
+          </div>
+
+          <div class="lead-table-wrap">
+            <table class="lead-table">
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Contact</th>
+                  <th>Grade / Qty</th>
+                  <th>Location / Pack</th>
+                  <th>Phone / Email</th>
+                  <th>Time / Request</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody data-desk-rows></tbody>
+            </table>
+          </div>
+
+          <p class="desk-empty" data-desk-empty hidden>No leads have been recorded yet.</p>
+        </section>
+      </main>
+    </div>
+
+    <script src="/api/makhana-public-config.js"></script>
+    <script src="./script.js"></script>
+    <script src="./desk.js"></script>
+  </body>
+</html>

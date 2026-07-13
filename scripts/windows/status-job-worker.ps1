@@ -12,7 +12,10 @@ try {
 
 $resources = $null
 if ($config -and (Test-Path -LiteralPath $config.nodePath)) {
-  try { $resources = (& $config.nodePath $config.resourceGuardScript --startup | ConvertFrom-Json).evaluation } catch { $resources = $null }
+  try {
+    $guardArgs = if ($process) { @() } else { @('--startup') }
+    $resources = (& $config.nodePath $config.resourceGuardScript @guardArgs | ConvertFrom-Json).evaluation
+  } catch { $resources = $null }
 }
 
 [pscustomobject]@{

@@ -13,7 +13,7 @@ import {
 
 export const WORKER_PROTOCOL_VERSION = "job-worker-2026-07-v1";
 export const WORKER_LIMITS = Object.freeze({
-  contextTokens: 4096,
+  contextTokens: 8192,
   concurrency: 1,
   leaseSeconds: 1200,
   heartbeatSeconds: 30,
@@ -21,6 +21,9 @@ export const WORKER_LIMITS = Object.freeze({
   maxDescriptionCharacters: 12000,
   maxEvidenceItems: 20,
   maxSupportingPassageCharacters: 700,
+  maxPacketCharacters: 11500,
+  maxPromptCharacters: 14500,
+  maxEvaluationEvidenceItems: 8,
 });
 
 const workerGroundedEvidenceSchema = evidenceSchema.extend({
@@ -85,15 +88,58 @@ function compactEvidence(item) {
   };
 }
 
+function evidencePriority(item) {
+  const text = `${item.claimType} ${item.value} ${item.supportingPassage}`.toLowerCase();
+  let priority = 0;
+  if (/visa|sponsor|work authorization|citizen|clearance|eligible|eligibility|remote|hybrid|on-site|onsite|location|india|relocat/.test(text)) priority += 1000;
+  if (/compensation|salary|pay|bonus|equity|rsu|stock|benefit/.test(text)) priority += 800;
+  if (/coding|code|python|sql|engineer|technical interview|algorithm|software|platform/.test(text)) priority += 700;
+  if (item.evidenceType === "explicit") priority += 100;
+  if (item.sourceUrl && item.supportingPassage) priority += 50;
+  return priority;
+}
+
 function uniqueEvidence(items) {
   const byKey = new Map();
+  let order = 0;
   for (const item of items) {
     const compacted = compactEvidence(item);
     if (!compacted.value) continue;
     const key = `${compacted.sourceUrl}|${compacted.supportingPassage}|${compacted.claimType}`;
-    if (!byKey.has(key)) byKey.set(key, compacted);
+    if (!byKey.has(key)) byKey.set(key, { item: compacted, order: order += 1 });
   }
-  return [...byKey.values()].slice(0, WORKER_LIMITS.maxEvidenceItems);
+  return [...byKey.values()]
+    .sort((left, right) => evidencePriority(right.item) - evidencePriority(left.item) || left.order - right.order)
+    .map(({ item }) => item)
+    .slice(0, WORKER_LIMITS.maxEvidenceItems);
+}
+
+function packetCharacters(packet) {
+  return JSON.stringify(packet).length;
+}
+
+function fitPacketToBudget(packet) {
+  while (packetCharacters(packet) > WORKER_LIMITS.maxPacketCharacters && packet.evidence.length > 3) {
+    packet.evidence.pop();
+  }
+  while (packetCharacters(packet) > WORKER_LIMITS.maxPacketCharacters && packet.feedbackExamples.length > 2) {
+    packet.feedbackExamples.pop();
+  }
+  if (packetCharacters(packet) > WORKER_LIMITS.maxPacketCharacters) {
+    const overflow = packetCharacters(packet) - WORKER_LIMITS.maxPacketCharacters;
+    packet.job.description = packet.job.description.slice(0, Math.max(2000, packet.job.description.length - overflow - 128));
+  }
+  while (packetCharacters(packet) > WORKER_LIMITS.maxPacketCharacters && packet.evidence.length > 1) {
+    packet.evidence.pop();
+  }
+  if (packetCharacters(packet) > WORKER_LIMITS.maxPacketCharacters) {
+    const overflow = packetCharacters(packet) - WORKER_LIMITS.maxPacketCharacters;
+    packet.job.description = packet.job.description.slice(0, Math.max(0, packet.job.description.length - overflow - 128));
+  }
+  if (packetCharacters(packet) > WORKER_LIMITS.maxPacketCharacters) {
+    throw new Error("The Windows worker packet cannot fit the configured context budget without truncating candidate constraints.");
+  }
+  return packet;
 }
 
 export function buildWorkerPacket({ task, job, feedbackExamples = [] }) {
@@ -112,7 +158,7 @@ export function buildWorkerPacket({ task, job, feedbackExamples = [] }) {
     ...(job.details?.claims || []),
     ...researchEvidence,
   ]);
-  return {
+  return fitPacketToBudget({
     protocolVersion: WORKER_PROTOCOL_VERSION,
     task: {
       id: task.id,
@@ -156,7 +202,7 @@ export function buildWorkerPacket({ task, job, feedbackExamples = [] }) {
       paidProvidersEnabled: false,
       allowedModelTier: "qwen3-4b-q4_k_m",
     },
-  };
+  });
 }
 
 function triageMessages(packet) {
@@ -180,12 +226,16 @@ function extractionMessages(packet) {
     },
     {
       role: "user",
-      content: `Job:\n${JSON.stringify(packet.job, null, 2)}\n\nEvidence:\n${JSON.stringify(packet.evidence, null, 2)}\n\nReturn at most 20 claims. Every explicit or inferred claim must include a sourceUrl and a verbatim supportingPassage drawn from the supplied material. Do not use model memory.`,
+      content: `Job:\n${JSON.stringify(packet.job, null, 2)}\n\nEvidence:\n${JSON.stringify(packet.evidence, null, 2)}\n\nReturn at most 8 highest-priority claims, favoring eligibility, compensation, and coding/interview evidence. Keep values and verbatim supporting passages concise. Every explicit or inferred claim must include a sourceUrl and a supportingPassage drawn from the supplied material. Do not use model memory.`,
     },
   ];
 }
 
 function deepMessages(packet, extraction) {
+  const compactExtraction = {
+    claims: uniqueEvidence(extraction?.claims || []).slice(0, WORKER_LIMITS.maxEvaluationEvidenceItems),
+    unknowns: (extraction?.unknowns || []).slice(0, 8).map((item) => compactString(item, 300)),
+  };
   return [
     {
       role: "system",
@@ -193,7 +243,7 @@ function deepMessages(packet, extraction) {
     },
     {
       role: "user",
-      content: `Candidate:\n${packet.candidate.baseline}\n\nTarget geography: ${packet.candidate.targetGeography}\nCompensation: ${packet.candidate.compensation}\nAvoid: ${packet.candidate.avoid}\n\nJob:\n${JSON.stringify(packet.job, null, 2)}\n\nValidated evidence extraction:\n${JSON.stringify(extraction, null, 2)}\n\nPrior owner feedback:\n${JSON.stringify(packet.feedbackExamples, null, 2)}\n\nEvaluate role fit, financial-services advantage, AI/data relevance, leadership, coding/interview risk, location/authorization, compensation/upside, company quality, and interview velocity. Verdict semantics are mandatory: apply means pursue the job, maybe means manual review, and pass means reject or skip the job; pass never means a successful grade. overallScore must be an integer attractiveness score from 0 to 100, not a 0-to-5 dimension score. A coherent strong fit with dimension scores around 4-5 should normally score 75-100 and be apply; a clear mismatch or blocker should normally score 0-39 and be pass. A primarily hands-on data/software/platform engineering role must score roleFit 0-2 and verdict pass. US on-site/hybrid is incompatible with continuing from India unless global-remote evidence is explicit. Citizenship, clearance, or incompatible work authorization is a blocker. Do not infer interview format, compensation, visa, or remote eligibility from silence. Every explicit or inferred claim must cite the validated evidence with a non-empty sourceUrl and supportingPassage.`,
+      content: `Candidate:\n${packet.candidate.baseline}\n\nTarget geography: ${packet.candidate.targetGeography}\nCompensation: ${packet.candidate.compensation}\nAvoid: ${packet.candidate.avoid}\n\nJob:\n${JSON.stringify(packet.job, null, 2)}\n\nValidated evidence extraction:\n${JSON.stringify(compactExtraction, null, 2)}\n\nPrior owner feedback:\n${JSON.stringify(packet.feedbackExamples, null, 2)}\n\nEvaluate role fit, financial-services advantage, AI/data relevance, leadership, coding/interview risk, location/authorization, compensation/upside, company quality, and interview velocity. Keep dimension reasoning concise. Verdict semantics are mandatory: apply means pursue the job, maybe means manual review, and pass means reject or skip the job; pass never means a successful grade. overallScore must be an integer attractiveness score from 0 to 100, not a 0-to-5 dimension score. A coherent strong fit with dimension scores around 4-5 should normally score 75-100 and be apply; a clear mismatch or blocker should normally score 0-39 and be pass. A primarily hands-on data/software/platform engineering role must score roleFit 0-2 and verdict pass. US on-site/hybrid is incompatible with continuing from India unless global-remote evidence is explicit. Citizenship, clearance, or incompatible work authorization is a blocker. Do not infer interview format, compensation, visa, or remote eligibility from silence. Every explicit or inferred claim must cite the validated evidence with a non-empty sourceUrl and supportingPassage.`,
     },
   ];
 }
@@ -227,13 +277,25 @@ export function getWorkerPasses(taskType) {
   throw new Error(`Unsupported worker task type: ${taskType}`);
 }
 
+export function workerPromptCharacters(messages) {
+  return messages.reduce((total, message) => total + String(message.content || "").length, 0);
+}
+
+function withinPromptBudget(pass) {
+  const promptCharacters = workerPromptCharacters(pass.messages);
+  if (promptCharacters > WORKER_LIMITS.maxPromptCharacters) {
+    throw new Error(`The ${pass.name} pass exceeds the Windows worker prompt budget.`);
+  }
+  return { ...pass, promptCharacters };
+}
+
 export function getWorkerPass(taskType, passName, packet, prior = {}) {
-  if (taskType === "triage") return { name: "triage", schema: triageSchema, messages: triageMessages(packet), maxTokens: 900 };
+  if (taskType === "triage") return withinPromptBudget({ name: "triage", schema: triageSchema, messages: triageMessages(packet), maxTokens: 900 });
   if (taskType === "deep" && passName === "extract") {
-    return { name: "extraction", schema: workerEvidenceExtractionSchema, messages: extractionMessages(packet), maxTokens: 1300 };
+    return withinPromptBudget({ name: "extraction", schema: workerEvidenceExtractionSchema, messages: extractionMessages(packet), maxTokens: 1800 });
   }
   if (taskType === "deep" && passName === "evaluate") {
-    return { name: "evaluation", schema: deepWorkerEvaluationSchema, messages: deepMessages(packet, prior.extraction), maxTokens: 2400 };
+    return withinPromptBudget({ name: "evaluation", schema: deepWorkerEvaluationSchema, messages: deepMessages(packet, prior.extraction), maxTokens: 2400 });
   }
   if (taskType === "critic") {
     const primaryVerdict = packet.job.deepEvaluation?.verdict;
@@ -242,9 +304,9 @@ export function getWorkerPass(taskType, passName, packet, prior = {}) {
         context.addIssue({ code: "custom", path: ["agrees"], message: "agrees must match whether recommendedVerdict equals the primary verdict." });
       }
     });
-    return { name: "critic", schema: workerCriticSchema, messages: criticMessages(packet), maxTokens: 900 };
+    return withinPromptBudget({ name: "critic", schema: workerCriticSchema, messages: criticMessages(packet), maxTokens: 900 });
   }
-  if (taskType === "outreach") return { name: "outreach", schema: outreachSchema, messages: outreachMessages(packet), maxTokens: 500 };
+  if (taskType === "outreach") return withinPromptBudget({ name: "outreach", schema: outreachSchema, messages: outreachMessages(packet), maxTokens: 500 });
   throw new Error(`Unsupported worker pass: ${taskType}/${passName}`);
 }
 

@@ -166,7 +166,7 @@ const report = {
   scope: "preliminary two-job synthetic calibration; not the 20-job production release gate",
   workerExitCode,
   model: "Qwen3-4B-Q4_K_M",
-  contextTokens: 4096,
+  contextTokens: 8192,
   concurrency: 1,
   durationSeconds: Number(((Date.now() - startedAt) / 1000).toFixed(1)),
   tasks: localData.localTasks.map((task) => ({ taskType: task.taskType, status: task.status, attempts: task.attempts })),

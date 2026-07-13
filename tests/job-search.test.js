@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "job-search-intelligence-"));
 process.env.TRADEGRAPH_DATA_DIR = tempDir;
@@ -27,6 +27,7 @@ const schemas = await import("../server/job-search/schemas.js");
 const cardFacts = await import("../server/job-search/card-facts.js");
 const workflow = await import("../server/job-search/workflow.js");
 const workerContract = await import("../server/job-search/worker-contract.js");
+const targetProfile = await import("../server/job-search/profile.js");
 const resourceGuard = await import("../scripts/job-search-windows-resource-guard.mjs");
 const windowsCollector = await import("../server/job-search/windows-collector.js");
 
@@ -357,7 +358,7 @@ test("Windows worker contract bounds evidence and requires grounded claims", asy
   });
   const task = await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: "worker-contract" });
   const packet = workerContract.buildWorkerPacket({ task: { ...task, attempts: 1 }, job, feedbackExamples: [] });
-  assert.equal(packet.job.description.length, workerContract.WORKER_LIMITS.maxDescriptionCharacters);
+  assert.ok(packet.job.description.length <= workerContract.WORKER_LIMITS.maxDescriptionCharacters);
   assert.equal(JSON.stringify(packet).includes("must-not-leave-server"), false);
   assert.equal(packet.constraints.allowedModelTier, "qwen3-4b-q4_k_m");
   assert.throws(() => workerContract.parseWorkerOutput("deep", {
@@ -382,6 +383,111 @@ test("Windows worker contract bounds evidence and requires grounded claims", asy
       redFlags: [], greenFlags: [], unknowns: [], outreachAngle: "",
     },
   }), /Invalid URL|Too small/i);
+});
+
+test("maximal Windows worker packet fits the 8192 context budget and retains priority evidence", () => {
+  const priorityEvidence = [
+    {
+      claimType: "work_authorization",
+      value: "India-based applicants must already be eligible to work for the employing entity.",
+      sourceUrl: "https://example.com/jobs/maximal",
+      supportingPassage: "Applicants must already be eligible to work for the employing entity from India.",
+      confidence: 1,
+      evidenceType: "explicit",
+    },
+    {
+      claimType: "compensation",
+      value: "The salary range is USD 170,000 to USD 210,000 plus equity.",
+      sourceUrl: "https://example.com/jobs/maximal",
+      supportingPassage: "Salary range: $170,000-$210,000 plus equity.",
+      confidence: 1,
+      evidenceType: "explicit",
+    },
+    {
+      claimType: "coding_interview",
+      value: "The interview includes a Python and SQL technical exercise.",
+      sourceUrl: "https://example.com/jobs/maximal",
+      supportingPassage: "Candidates complete a Python and SQL technical exercise.",
+      confidence: 1,
+      evidenceType: "explicit",
+    },
+  ];
+  const lowerPriorityEvidence = Array.from({ length: 30 }, (_, index) => ({
+    claimType: `general_${index}`,
+    value: `General company detail ${index} ${"value ".repeat(35)}`,
+    sourceUrl: `https://example.com/jobs/maximal?detail=${index}`,
+    supportingPassage: `General background passage ${index}. ${"Background information. ".repeat(30)}`,
+    confidence: 0.8,
+    evidenceType: "explicit",
+  }));
+  const job = {
+    id: "job_maximal_packet",
+    sourceId: "maximal_packet",
+    title: "Senior Director, AI Strategy and Financial Services",
+    company: "Example Financial",
+    location: "India / Global Remote",
+    canonicalUrl: "https://example.com/jobs/maximal",
+    description: Array.from({ length: 120 }, (_, index) => `Responsibility ${index}: lead cross-functional AI, analytics, risk, and product strategy programs.`).join("\n"),
+    postedAt: "2026-07-13T12:00:00.000Z",
+    roleFamilyId: "data_ai_strategy",
+    details: { sourceEvidence: [...lowerPriorityEvidence, ...priorityEvidence], triage: { relevance: "relevant" } },
+  };
+  const packet = workerContract.buildWorkerPacket({
+    task: { id: "task_maximal_packet", taskKey: "deep:maximal", taskType: "deep", attempts: 1, leaseUntil: "2026-07-13T13:00:00.000Z" },
+    job,
+    feedbackExamples: Array.from({ length: 6 }, (_, index) => ({
+      title: `Prior role ${index}`,
+      company: `Prior company ${index}`,
+      disposition: index % 2 ? "pass" : "apply",
+      reasons: ["Representative owner feedback"],
+      note: "Use this only as preference evidence.",
+    })),
+  });
+
+  assert.equal(workerContract.WORKER_LIMITS.contextTokens, 8192);
+  assert.equal(workerContract.WORKER_LIMITS.concurrency, 1);
+  assert.ok(JSON.stringify(packet).length <= workerContract.WORKER_LIMITS.maxPacketCharacters);
+  assert.deepEqual(
+    { title: packet.job.title, company: packet.job.company, location: packet.job.location, url: packet.job.url },
+    { title: job.title, company: job.company, location: job.location, url: job.canonicalUrl },
+  );
+  assert.equal(packet.candidate.baseline, targetProfile.TARGET_PROFILE.baseline);
+  assert.equal(packet.candidate.targetGeography, targetProfile.TARGET_PROFILE.targetGeography);
+  assert.equal(packet.candidate.compensation, targetProfile.TARGET_PROFILE.compensation);
+  assert.equal(packet.candidate.avoid, targetProfile.TARGET_PROFILE.avoid);
+  assert.ok(priorityEvidence.every((expected) => packet.evidence.some((item) => item.claimType === expected.claimType)));
+  assert.ok(packet.evidence.length < lowerPriorityEvidence.length + priorityEvidence.length);
+
+  const extractionPass = workerContract.getWorkerPass("deep", "extract", packet);
+  assert.ok(extractionPass.promptCharacters <= workerContract.WORKER_LIMITS.maxPromptCharacters);
+  assert.equal(extractionPass.maxTokens, 1800);
+  assert.throws(() => extractionPass.schema.parse({
+    claims: [{
+      claimType: "eligibility",
+      value: "Unsupported eligibility claim",
+      sourceUrl: "",
+      supportingPassage: "",
+      sourceDate: "",
+      confidence: 0.9,
+      evidenceType: "inferred",
+    }],
+    unknowns: [],
+  }), /Invalid URL|Too small/i);
+
+  const evaluationPass = workerContract.getWorkerPass("deep", "evaluate", packet, {
+    extraction: { claims: packet.evidence, unknowns: Array.from({ length: 10 }, (_, index) => `Unknown ${index}`) },
+  });
+  assert.ok(evaluationPass.promptCharacters <= workerContract.WORKER_LIMITS.maxPromptCharacters);
+  assert.equal(evaluationPass.maxTokens, 2400);
+});
+
+test("Windows collector launcher quotes paths and status uses the live resource phase", async () => {
+  const collectorScript = await readFile(new URL("../scripts/windows/start-job-collector.ps1", import.meta.url), "utf8");
+  const statusScript = await readFile(new URL("../scripts/windows/status-job-worker.ps1", import.meta.url), "utf8");
+  assert.match(collectorScript, /ConvertTo-ProcessArgument/);
+  assert.match(collectorScript, /ConvertTo-ProcessArgument "--chrome=\$\(\$config\.chromePath\)"/);
+  assert.match(collectorScript, /ConvertTo-ProcessArgument '--run-label=Scheduled Windows collector'/);
+  assert.match(statusScript, /if \(\$process\) \{ @\(\) \} else \{ @\('--startup'\) \}/);
 });
 
 test("Windows resource guard permits this model tier and always rejects Qwen3-14B", () => {

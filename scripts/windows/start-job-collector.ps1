@@ -14,16 +14,19 @@ $credential = Get-WorkerCredential
 $env:JOBSEARCH_WORKER_BASE_URL = $config.endpoint
 $env:JOBSEARCH_WORKER_TOKEN = $credential.GetNetworkCredential().Password
 
+function ConvertTo-ProcessArgument([string]$Value) {
+  return '"' + ($Value -replace '"', '\"') + '"'
+}
 $collectorArgs = @(
-  "`"$($config.collectorScript)`"",
-  "--headless",
-  "--sources=$($config.sources)",
-  "--profile=$($config.profileDir)",
-  "--chrome=$($config.chromePath)",
-  "--max-queries=$($config.maxQueries)",
-  "--max-pages=$($config.maxPages)",
-  "--max-jobs=$($config.maxJobs)",
-  "--run-label=Scheduled Windows collector"
+  (ConvertTo-ProcessArgument $config.collectorScript),
+  (ConvertTo-ProcessArgument '--headless'),
+  (ConvertTo-ProcessArgument "--sources=$($config.sources)"),
+  (ConvertTo-ProcessArgument "--profile=$($config.profileDir)"),
+  (ConvertTo-ProcessArgument "--chrome=$($config.chromePath)"),
+  (ConvertTo-ProcessArgument "--max-queries=$($config.maxQueries)"),
+  (ConvertTo-ProcessArgument "--max-pages=$($config.maxPages)"),
+  (ConvertTo-ProcessArgument "--max-jobs=$($config.maxJobs)"),
+  (ConvertTo-ProcessArgument '--run-label=Scheduled Windows collector')
 )
 $stdout = Join-Path $script:CollectorLogsPath 'collector.stdout.log'
 $stderr = Join-Path $script:CollectorLogsPath 'collector.stderr.log'

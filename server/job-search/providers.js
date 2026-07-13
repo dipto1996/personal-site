@@ -70,8 +70,8 @@ export async function searchSerpApiJobs(querySpec, { runId } = {}) {
   url.searchParams.set("hl", "en");
   url.searchParams.set("chips", "date_posted:today");
   url.searchParams.set("api_key", process.env.SERPAPI_API_KEY);
-  const payload = await fetchJson(url);
   await recordProviderUsage({ provider: "serpapi", operation: "google_jobs", runId, requestCount: 1 });
+  const payload = await fetchJson(url);
   const jobs = (payload.jobs_results || []).map((job) => ({
     sourceId: sourceId("serp", job.job_id || job.title, job.company_name, job.location),
     title: compact(job.title, 300),
@@ -95,10 +95,10 @@ export async function searchBrave(query, { runId, freshness = "pd", count = 10 }
   url.searchParams.set("search_lang", "en");
   url.searchParams.set("country", "us");
   if (freshness) url.searchParams.set("freshness", freshness);
+  await recordProviderUsage({ provider: "brave", operation: "web_search", runId, requestCount: 1 });
   const payload = await fetchJson(url, {
     headers: { accept: "application/json", "x-subscription-token": process.env.BRAVE_SEARCH_API_KEY },
   });
-  await recordProviderUsage({ provider: "brave", operation: "web_search", runId, requestCount: 1 });
   return {
     status: "live",
     results: (payload.web?.results || []).map((item) => ({

@@ -189,7 +189,21 @@ async function discover({ runId, trigger, slot = "morning", discoveryUrls = [] }
     : slot === "evening" ? plan.braveQueries.slice(braveHalf) : plan.braveQueries.slice(0, braveHalf);
   const usage = await getUsageSummary();
   const serpRemaining = Math.max(0, 250 - (usage.byProvider.serpapi?.requests || 0));
-  const serpSettled = await Promise.allSettled(serpQueries.slice(0, serpRemaining).map((query) => searchSerpApiJobs(query, { runId })));
+  const attemptedSerpQueries = serpQueries.slice(0, serpRemaining);
+  const serpSettled = await Promise.allSettled(attemptedSerpQueries.map((query) => searchSerpApiJobs(query, { runId })));
+  const serpFailures = serpSettled.map((result, index) => ({ result, query: attemptedSerpQueries[index] }))
+    .filter((item) => item.result.status === "rejected");
+  const serpFallbackSettled = [];
+  for (const { query } of serpFailures) {
+    try {
+      serpFallbackSettled.push({
+        status: "fulfilled",
+        value: await braveWithinQuota(`${query.query} (job OR jobs OR career OR careers)`, { runId, freshness: "pd", count: 10 }),
+      });
+    } catch (reason) {
+      serpFallbackSettled.push({ status: "rejected", reason });
+    }
+  }
   const companyRecords = trigger === "manual" ? [] : await listCompanies(100);
   const seededCompanies = rotatingWatchlistCompanies(new Date(), 2).map((name) => ({ name, domain: "" }));
   const rotatedCompanies = rotateItems(companyRecords, 2, `${new Date().toISOString().slice(0, 10)}:${slot}`);
@@ -235,7 +249,7 @@ async function discover({ runId, trigger, slot = "morning", discoveryUrls = [] }
   ]);
 
   const serpJobs = serpSettled.flatMap((result) => result.status === "fulfilled" ? result.value.jobs : []);
-  const braveResults = [...braveSettled, ...watchlistSettled, ...backfillSettled]
+  const braveResults = [...braveSettled, ...watchlistSettled, ...backfillSettled, ...serpFallbackSettled]
     .flatMap((result) => result.status === "fulfilled" ? result.value.results : [])
     .filter((result) => /job|career|greenhouse|lever|ashby|workday|smartrecruiters/i.test(`${result.url} ${result.title}`))
     .map((result) => ({
@@ -288,11 +302,22 @@ async function discover({ runId, trigger, slot = "morning", discoveryUrls = [] }
     rawLeads,
     providers: {
       configuration: providerConfiguration(),
-      serpapi: { requested: serpQueries.length, completed: serpSettled.filter((item) => item.status === "fulfilled").length, remainingMonthly: serpRemaining },
+      serpapi: {
+        requested: serpQueries.length,
+        completed: serpSettled.filter((item) => item.status === "fulfilled").length,
+        failed: serpFailures.length,
+        fallbackCompleted: serpFallbackSettled.filter((item) => item.status === "fulfilled").length,
+        remainingMonthly: serpRemaining,
+        errors: serpFailures.map(({ result, query }) => ({
+          queryId: query.id,
+          error: String(result.reason?.message || "Google Jobs request failed").slice(0, 300),
+        })),
+      },
       brave: {
-        requested: braveQueries.length + watchlistQueries.length + weeklyBackfill.length,
-        completed: [...braveSettled, ...watchlistSettled, ...backfillSettled].filter((item) => item.status === "fulfilled").length,
+        requested: braveQueries.length + watchlistQueries.length + weeklyBackfill.length + serpFallbackSettled.length,
+        completed: [...braveSettled, ...watchlistSettled, ...backfillSettled, ...serpFallbackSettled].filter((item) => item.status === "fulfilled").length,
         weeklyBackfill: weeklyBackfill.length,
+        serpFallbacks: serpFallbackSettled.length,
       },
       ats: {
         configured: atsConfigured.provider,

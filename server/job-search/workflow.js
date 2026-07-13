@@ -1013,9 +1013,15 @@ function buildTaskLookup(tasks = []) {
     lookup.get(key).push(task);
   }
   for (const values of lookup.values()) {
-    values.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    values.sort((left, right) => compareQueueTaskCreatedAt(left, right));
   }
   return lookup;
+}
+
+export function compareQueueTaskCreatedAt(left, right) {
+  const leftTime = new Date(left?.createdAt || 0).getTime();
+  const rightTime = new Date(right?.createdAt || 0).getTime();
+  return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
 }
 
 function pendingTaskFor(lookup, jobId, taskType) {

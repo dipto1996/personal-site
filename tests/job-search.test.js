@@ -340,6 +340,14 @@ test("queue hold and controlled release preserve history and only activate the r
   }
 });
 
+test("queue task ordering accepts Neon Date values and local timestamp strings", () => {
+  const earlier = { createdAt: new Date("2026-07-13T12:00:00.000Z") };
+  const later = { createdAt: "2026-07-13T13:00:00.000Z" };
+  assert.ok(workflow.compareQueueTaskCreatedAt(earlier, later) < 0);
+  assert.ok(workflow.compareQueueTaskCreatedAt(later, earlier) > 0);
+  assert.equal(workflow.compareQueueTaskCreatedAt({}, {}), 0);
+});
+
 test("Windows worker contract bounds evidence and requires grounded claims", async () => {
   const job = await seedJob({
     sourceId: "worker_contract",

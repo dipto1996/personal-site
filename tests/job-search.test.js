@@ -340,6 +340,19 @@ test("queue hold and controlled release preserve history and only activate the r
       details: { triageStatus: "pending" },
     });
     await repository.enqueueLocalTask({ jobId: pendingTriage.id, taskType: "triage", revision: "collector_triage" });
+    const pendingOutreach = await seedJob({
+      sourceId: "held_outreach",
+      status: "needs_review",
+      details: {
+        triageStatus: "complete",
+        triage: { relevance: "relevant", confidence: 0.95, codingIntensity: "low" },
+        deepStatus: "complete",
+        deepEvaluation: { verdict: "apply", overallScore: 92 },
+        criticStatus: "complete",
+        critic: { agrees: true, recommendedVerdict: "apply", confidence: 0.9 },
+      },
+    });
+    await repository.enqueueLocalTask({ jobId: pendingOutreach.id, taskType: "outreach", revision: "outreach_ready" });
     const mismatch = await seedJob({
       sourceId: "clear_mismatch_not_promoted",
       status: "triage_rejected",
@@ -366,7 +379,7 @@ test("queue hold and controlled release preserve history and only activate the r
       reason: "windows_migration_precalibration",
     });
     assert.equal(held.queueControlAfter.holdNewTasks, true);
-    assert.equal(held.queueCounts.after.byStatus.held, 23);
+    assert.equal(held.queueCounts.after.byStatus.held, 24);
 
     const release = await workflow.releaseHeldWindowsBacklog({
       operationKey: "release-operation-001",
@@ -375,8 +388,10 @@ test("queue hold and controlled release preserve history and only activate the r
     });
     assert.equal(release.selectedCount, 20);
     assert.equal(release.candidateCounts.triagePending, 1);
+    assert.equal(release.candidateCounts.outreachReady, 1);
     assert.equal(release.queueControlAfter.activeReleaseJobIds.length, 20);
     assert.equal(release.selected.some((item) => item.sourceId === "held_collector_triage"), true);
+    assert.equal(release.selected.some((item) => item.sourceId === "held_outreach"), true);
     assert.equal(release.selected.some((item) => item.sourceId === "clear_mismatch_not_promoted"), false);
     assert.equal(release.selected.some((item) => item.sourceId === "clear_mismatch_promoted"), true);
 

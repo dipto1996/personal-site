@@ -1156,6 +1156,7 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
   const deepPromoted = [];
   const deepUncertain = [];
   const criticReady = [];
+  const outreachReady = [];
 
   for (const job of jobs) {
     if (!job || active.has(job.id)) continue;
@@ -1181,6 +1182,11 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
         taskType: "critic",
         task: pendingTaskFor(lookup, job.id, "critic"),
       });
+      continue;
+    }
+    if (nextLocalTaskType(job) === "outreach") {
+      const task = pendingTaskFor(lookup, job.id, "outreach");
+      if (task) outreachReady.push({ job, taskType: "outreach", task });
     }
   }
 
@@ -1191,8 +1197,11 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
   criticReady.sort((left, right) => (
     (right.job.details?.deepEvaluation?.overallScore || 0) - (left.job.details?.deepEvaluation?.overallScore || 0)
   ));
+  outreachReady.sort((left, right) => (
+    (right.job.details?.deepEvaluation?.overallScore || 0) - (left.job.details?.deepEvaluation?.overallScore || 0)
+  ));
 
-  const ordered = interleaveBuckets(triagePending, deepRelevant, deepPromoted, deepUncertain, criticReady);
+  const ordered = interleaveBuckets(triagePending, deepRelevant, deepPromoted, deepUncertain, criticReady, outreachReady);
   const selected = ordered.slice(0, limit);
   return {
     counts: {
@@ -1202,6 +1211,7 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
       deepPromoted: deepPromoted.length,
       deepUncertain: deepUncertain.length,
       criticReady: criticReady.length,
+      outreachReady: outreachReady.length,
     },
     selected,
   };

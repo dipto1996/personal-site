@@ -1073,7 +1073,7 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
     (right.job.details?.deepEvaluation?.overallScore || 0) - (left.job.details?.deepEvaluation?.overallScore || 0)
   ));
 
-  const ordered = [...deepRelevant, ...deepPromoted, ...deepUncertain, ...criticReady];
+  const ordered = interleaveBuckets(deepRelevant, deepPromoted, deepUncertain, criticReady);
   const selected = ordered.slice(0, limit);
   return {
     counts: {

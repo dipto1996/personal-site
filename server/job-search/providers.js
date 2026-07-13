@@ -197,30 +197,30 @@ const CLOUDFLARE_NEURON_RATES = {
 
 const MODEL_ROUTES = {
   triage: [
-    { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-14b", format: "json_schema", thinking: false },
-    { provider: "groq", model: "qwen/qwen3-32b", format: "json_object" },
+    { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-4b", format: "json_schema", thinking: false },
     { provider: "cloudflare", model: "@cf/meta/llama-3.1-8b-instruct-fast", format: "json_object" },
+    { provider: "groq", model: "openai/gpt-oss-120b", format: "json_schema", reasoningEffort: "low" },
     { provider: "openrouter", model: "openrouter/free", format: "json_schema" },
     { provider: "zai", model: "glm-4.7-flash", format: "json_object" },
   ],
   deep: [
-    { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-14b", format: "json_schema", thinking: true },
+    { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-4b", format: "json_schema", thinking: true },
     { provider: "groq", model: "openai/gpt-oss-120b", format: "json_schema", reasoningEffort: "low" },
     { provider: "cloudflare", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", format: "json_object" },
     { provider: "openrouter", model: "openrouter/free", format: "json_schema" },
     { provider: "zai", model: "glm-5.2", format: "json_object", paid: true },
   ],
   critic: [
-    { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-14b", format: "json_schema", thinking: true },
+    { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-4b", format: "json_schema", thinking: true },
     { provider: "cloudflare", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", format: "json_object" },
     { provider: "openrouter", model: "openrouter/free", format: "json_schema" },
     { provider: "groq", model: "openai/gpt-oss-120b", format: "json_schema", reasoningEffort: "low" },
     { provider: "moonshot", model: "kimi-k2.5", format: "json_object", paid: true },
   ],
   utility: [
-    { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-14b", format: "json_schema", thinking: false },
-    { provider: "groq", model: "qwen/qwen3-32b", format: "json_object" },
+    { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-4b", format: "json_schema", thinking: false },
     { provider: "cloudflare", model: "@cf/meta/llama-3.1-8b-instruct-fast", format: "json_object" },
+    { provider: "groq", model: "openai/gpt-oss-120b", format: "json_schema", reasoningEffort: "low" },
     { provider: "openrouter", model: "openrouter/free", format: "json_schema" },
     { provider: "zai", model: "glm-4.7-flash", format: "json_object" },
   ],
@@ -285,9 +285,7 @@ async function quotaStatus(route, estimatedInputTokens, maxTokens) {
   }
   const requestLimit = positiveLimit("JOBSEARCH_GROQ_REQUESTS_PER_DAY", FREE_LIMITS.groqRequestsPerDay);
   const modelUsage = usage.byModel?.[route.model] || { inputTokens: 0, outputTokens: 0 };
-  const tokenLimit = route.model === "qwen/qwen3-32b"
-    ? positiveLimit("JOBSEARCH_GROQ_QWEN_TOKENS_PER_DAY", FREE_LIMITS.groqQwenTokensPerDay)
-    : positiveLimit("JOBSEARCH_GROQ_GPT_OSS_TOKENS_PER_DAY", FREE_LIMITS.groqGptOssTokensPerDay);
+  const tokenLimit = positiveLimit("JOBSEARCH_GROQ_GPT_OSS_TOKENS_PER_DAY", FREE_LIMITS.groqGptOssTokensPerDay);
   const usedTokens = modelUsage.inputTokens + modelUsage.outputTokens;
   return {
     allowed: usage.requests < requestLimit && usedTokens + estimatedInputTokens + maxTokens <= tokenLimit,
@@ -508,7 +506,7 @@ export async function getFreeProviderQuotaSummary() {
   return {
     local: {
       configured: providerConfigured("local"), period: "unlimited", requests: 0,
-      model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-14b",
+      model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-4b",
     },
     groq: {
       configured: providerConfigured("groq"), period: "day", requests: groq.requests,

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 let sharedTempDir = null;
@@ -23,6 +23,7 @@ async function startServer(options = {}) {
   delete process.env.STRIPE_SECRET_KEY;
   process.env.ALERT_DEFAULT_RECIPIENTS = "arkaprabhagoon95@gmail.com, roydiptopal1996@gmail.com";
   process.env.CRON_SECRET = "test-cron-secret";
+  process.env.JOBSEARCH_WORKER_TOKEN = "test-worker-token-with-at-least-32-characters";
 
   const appModule = await import(`${pathToFileURL(path.resolve("server/app.js")).href}?test=${Date.now()}`);
   const persistenceModule = await import(pathToFileURL(path.resolve("server/persistence.js")).href);
@@ -43,6 +44,7 @@ async function startServer(options = {}) {
       draft.subscriptions = [];
       return draft;
     });
+    await rm(path.join(tempDir, "job-search-intelligence.json"), { force: true });
   }
 
   if (resetAnalytics) {
@@ -112,6 +114,255 @@ async function loadInsightBackend(tempDir) {
     exportCatalog,
   };
 }
+
+test("Windows worker endpoints require a token and commit triage results idempotently", async () => {
+  const server = await startServer();
+  const token = process.env.JOBSEARCH_WORKER_TOKEN;
+  const authorization = { authorization: `Bearer ${token}` };
+
+  try {
+    const unauthorized = await jsonFetch(server.baseUrl, "/api/job-search/worker/health");
+    assert.equal(unauthorized.response.status, 401);
+
+    const health = await jsonFetch(server.baseUrl, "/api/job-search/worker/health", { headers: authorization });
+    assert.equal(health.response.status, 200);
+    assert.equal(health.payload.concurrency, 1);
+    assert.equal(health.payload.paidProvidersEnabled, false);
+
+    const repository = await import(pathToFileURL(path.resolve("server/job-search/repository.js")).href);
+    const contract = await import(pathToFileURL(path.resolve("server/job-search/worker-contract.js")).href);
+    const job = await repository.upsertJob({
+      sourceId: `api_worker_${Date.now()}`,
+      canonicalUrl: "https://example.com/jobs/windows-worker",
+      title: "AI Product Lead",
+      normalizedTitle: "ai product lead",
+      company: "Example",
+      location: "Remote",
+      description: "Lead AI product strategy and work with engineering partners.",
+      postedAt: null,
+      sourceProvider: "test",
+      sourceQuery: "fixture",
+      contentHash: `api_worker_hash_${Date.now()}`,
+      roleFamilyId: "ai_product_platform",
+      status: "triage_pending",
+      details: {},
+    });
+    await repository.enqueueLocalTask({ jobId: job.id, taskType: "triage", revision: "api-worker-test" });
+
+    const claim = await jsonFetch(server.baseUrl, "/api/job-search/worker/claim", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ workerId: "test-windows-worker", version: "test-v1" }),
+    });
+    assert.equal(claim.response.status, 200);
+    assert.equal(claim.payload.task.taskType, "triage");
+    assert.match(claim.payload.task.leaseToken, /^lease_/);
+    assert.equal(JSON.stringify(claim.payload.packet).includes("DATABASE_URL"), false);
+
+    const output = {
+      triage: {
+        roleFamilyId: "ai_product_platform",
+        relevance: "relevant",
+        confidence: 0.95,
+        scopeSummary: "AI product leadership.",
+        codingIntensity: "low",
+        seniority: "aligned",
+        reasons: ["Product leadership"],
+        unknowns: ["Compensation"],
+      },
+    };
+    const resultId = contract.workerResultId(claim.payload.task.taskKey, output);
+    const resultBody = {
+      workerId: "test-windows-worker",
+      version: "test-v1",
+      taskId: claim.payload.task.id,
+      leaseToken: claim.payload.task.leaseToken,
+      resultId,
+      model: "Qwen3-4B-Q4_K_M",
+      output,
+      usage: { inputTokens: 100, outputTokens: 50 },
+    };
+    const completion = await jsonFetch(server.baseUrl, "/api/job-search/worker/result", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify(resultBody),
+    });
+    assert.equal(completion.response.status, 200);
+    assert.equal(completion.payload.idempotent, false);
+
+    const replay = await jsonFetch(server.baseUrl, "/api/job-search/worker/result", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify(resultBody),
+    });
+    assert.equal(replay.response.status, 200);
+    assert.equal(replay.payload.idempotent, true);
+    assert.equal((await repository.getJob(job.id)).details.triageStatus, "complete");
+  } finally {
+    await server.close();
+  }
+});
+
+test("collector batches stay server-side, idempotent, and respect held local queue state", async () => {
+  process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
+  const server = await startServer();
+  const token = process.env.JOBSEARCH_WORKER_TOKEN;
+  const authorization = { authorization: `Bearer ${token}` };
+
+  try {
+    const repository = await import(pathToFileURL(path.resolve("server/job-search/repository.js")).href);
+    await repository.setLocalQueueControl({
+      holdNewTasks: true,
+      holdReason: "windows_migration_precalibration",
+      activeReleaseJobIds: [],
+    });
+
+    const batchBody = {
+      operationKey: "collector-batch-001",
+      collectorRunId: "jsrun_collector_fixture_001",
+      collectorRunLabel: "Fixture collector",
+      final: true,
+      selectedSources: ["linkedin", "google"],
+      sourceHealth: [
+        { sourceId: "linkedin", status: "live", pagesVisited: 2, resultCount: 4, jobCount: 1, blocked: false, errors: [], notes: "", sampleUrls: ["https://www.linkedin.com/jobs/view/4437322106/"] },
+        { sourceId: "google", status: "empty", pagesVisited: 1, resultCount: 0, jobCount: 0, blocked: false, errors: [], notes: "", sampleUrls: [] },
+      ],
+      leads: [{
+        url: "https://www.linkedin.com/jobs/view/4437322106/",
+        title: "Director, AI Strategy",
+        company: "Example Fintech",
+        location: "Remote",
+        postedAt: null,
+        postedAtRaw: "6 hours ago",
+        sourceProvider: "linkedin",
+        sourceQuery: "analytics",
+        snippet: "Lead AI strategy and analytics programs.",
+        externalId: "4437322106",
+        status: "extraction_pending",
+        ontology: { eligible: true },
+        raw: {},
+      }],
+      jobs: [{
+        sourceId: "collector_job_fixture_001",
+        title: "Director, AI Strategy",
+        company: "Example Fintech",
+        description: "Lead AI strategy and analytics programs across financial-services products.",
+        url: "https://jobs.lever.co/example/abc123",
+        canonicalUrl: "https://jobs.lever.co/example/abc123",
+        location: "Remote",
+        postedAt: null,
+        postedAtRaw: "6 hours ago",
+        sourceProvider: "linkedin",
+        sourceQuery: "analytics",
+        raw: { collector: { portalId: "4437322106", atsId: "abc123" } },
+      }],
+      errors: [],
+    };
+
+    const first = await jsonFetch(server.baseUrl, "/api/job-search/worker/discovery-batch", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify(batchBody),
+    });
+    assert.equal(first.response.status, 200);
+    assert.equal(first.payload.counts.changedJobs, 1);
+    assert.equal(first.payload.counts.localQueued, 1);
+
+    const replay = await jsonFetch(server.baseUrl, "/api/job-search/worker/discovery-batch", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify(batchBody),
+    });
+    assert.equal(replay.response.status, 200);
+    assert.equal(replay.payload.counts.changedJobs, 1);
+
+    const tasks = await repository.listLocalTasks({ limit: 20 });
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].status, "held");
+    const run = await repository.getRun("jsrun_collector_fixture_001");
+    assert.equal(run.providers.collector.sources.linkedin.status, "live");
+    assert.equal(run.providers.collector.sources.google.status, "empty");
+  } finally {
+    delete process.env.JOBSEARCH_LOCAL_WORKER_ENABLED;
+    await server.close();
+  }
+});
+
+test("owner queue hold and release routes are authenticated, idempotent, and dry-run aware", async () => {
+  process.env.JOBSEARCH_ALLOW_ANY_SIGNED_IN = "true";
+  process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
+  const server = await startServer();
+
+  try {
+    const sessionResult = await jsonFetch(server.baseUrl, "/api/demo-login", { method: "POST" });
+    const cookie = sessionResult.response.headers.get("set-cookie");
+    const repository = await import(pathToFileURL(path.resolve("server/job-search/repository.js")).href);
+
+    for (let index = 0; index < 22; index += 1) {
+      const job = await repository.upsertJob({
+        sourceId: `api_release_${index}`,
+        canonicalUrl: `https://example.com/jobs/${index}`,
+        title: "Director, AI Strategy",
+        normalizedTitle: "director ai strategy",
+        company: `Example ${index}`,
+        location: "Remote",
+        description: "Lead AI strategy and analytics programs across financial-services products.",
+        postedAt: null,
+        sourceProvider: "test",
+        sourceQuery: "fixture",
+        contentHash: `api_release_hash_${index}`,
+        roleFamilyId: "ai_product_platform",
+        status: index < 18 ? "deep_review_pending" : "critic_pending",
+        details: index < 18
+          ? { triageStatus: "complete", triage: { relevance: index < 12 ? "relevant" : "uncertain", confidence: 0.85, codingIntensity: "low" } }
+          : {
+            triageStatus: "complete",
+            triage: { relevance: "relevant", confidence: 0.92, codingIntensity: "low" },
+            deepStatus: "complete",
+            deepEvaluation: { verdict: "apply", overallScore: 88 - index },
+          },
+      });
+      await repository.enqueueLocalTask({ jobId: job.id, taskType: index < 18 ? "deep" : "critic", revision: `api_release_task_${index}` });
+    }
+
+    const hold = await jsonFetch(server.baseUrl, "/api/job-search/local-queue/hold", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "hold-route-001", dryRun: false }),
+    });
+    assert.equal(hold.response.status, 200);
+    assert.equal(hold.payload.queueControlAfter.holdNewTasks, true);
+
+    const dryRun = await jsonFetch(server.baseUrl, "/api/job-search/local-queue/release", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "release-route-dryrun-001", dryRun: true, limit: 20 }),
+    });
+    assert.equal(dryRun.response.status, 200);
+    assert.equal(dryRun.payload.selectedCount, 20);
+
+    const release = await jsonFetch(server.baseUrl, "/api/job-search/local-queue/release", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "release-route-001", dryRun: false, limit: 20 }),
+    });
+    assert.equal(release.response.status, 200);
+    assert.equal(release.payload.selectedCount, 20);
+
+    const replay = await jsonFetch(server.baseUrl, "/api/job-search/local-queue/release", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "release-route-001", dryRun: false, limit: 20 }),
+    });
+    assert.equal(replay.response.status, 200);
+    assert.equal(replay.payload.selectedCount, 20);
+    assert.equal(replay.payload.queueControlAfter.activeReleaseJobIds.length, 20);
+  } finally {
+    delete process.env.JOBSEARCH_ALLOW_ANY_SIGNED_IN;
+    delete process.env.JOBSEARCH_LOCAL_WORKER_ENABLED;
+    await server.close();
+  }
+});
 
 test("workspace auth, alerts, and simulated billing work end to end", async () => {
   const server = await startServer();

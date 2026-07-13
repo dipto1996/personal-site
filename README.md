@@ -89,9 +89,9 @@ Core routes:
 Provider environment:
 
 - `DATABASE_URL` for the shared Neon job, lead, queue, and evaluation tables
-- `JOBSEARCH_LOCAL_WORKER_ENABLED=true` to make Vercel enqueue work for the Mac
+- `JOBSEARCH_LOCAL_WORKER_ENABLED=true` to make Vercel enqueue bounded local work for the Windows queue
 - `SERPAPI_API_KEY`, `BRAVE_SEARCH_API_KEY`, and `TAVILY_API_KEY` as non-blocking cloud discovery fallbacks
-- `GROQ_API_KEY`, Cloudflare Workers AI, and OpenRouter as optional model comparison/fallback routes
+- `GROQ_API_KEY`, Cloudflare Workers AI, and OpenRouter as optional free fallback routes
 - `CRON_SECRET` for Vercel Cron authorization
 
 The previous Qwen3-14B Mac inference service is disabled because it placed unacceptable pressure on
@@ -101,13 +101,49 @@ Qwen3-4B or Qwen3-8B after a hardware benchmark. Cloud model failures must not b
 See [`docs/job-search-windows-handoff.md`](./docs/job-search-windows-handoff.md) for the current
 queue state, security boundary, Windows implementation plan, and calibration gates.
 
+### Windows inference worker
+
+The Windows implementation uses an outbound-only HTTPS client. Vercel retains all database access and
+exposes bearer-token-protected claim, heartbeat, result, failure, queue, and health routes under
+`/api/job-search/worker/*`. The Windows computer receives a bounded evidence packet for one leased task;
+it never receives `DATABASE_URL` or provider credentials.
+
+The measured Windows host is approved only for `Qwen3-4B-Q4_K_M`, context 4096, concurrency 1. The
+resource guard rejects Qwen3-8B and Qwen3-14B on this host. `llama-server` binds to `127.0.0.1`, runs at
+below-normal priority, starts only after a claimed task, and stops after five idle minutes or worker exit.
+
+Useful Windows commands:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File scripts/windows/status-job-worker.ps1
+powershell.exe -ExecutionPolicy Bypass -File scripts/windows/start-job-worker.ps1
+powershell.exe -ExecutionPolicy Bypass -File scripts/windows/stop-job-worker.ps1
+powershell.exe -ExecutionPolicy Bypass -File scripts/windows/status-job-collector.ps1
+```
+
+Run `scripts/windows/setup-job-worker.ps1` only after the worker endpoints are deployed and a dedicated
+`JOBSEARCH_WORKER_TOKEN` is configured in Vercel. It stores the Windows copy with current-user DPAPI and
+only registers the scheduled task when `-RegisterScheduledTask` is passed. Do not copy `.env.local` or
+the Neon connection string to Windows.
+
+The Windows collector also runs outbound-only and submits bounded discovery batches to
+`POST /api/job-search/worker/discovery-batch`. The dashboard and owner controls now expose queue hold
+state, and Vercel-only queue migration controls live at:
+
+- `POST /api/job-search/local-queue/hold`
+- `POST /api/job-search/local-queue/release`
+
+The implementation and preliminary calibration record is in
+[`docs/job-search-windows-report.md`](./docs/job-search-windows-report.md). The two-job synthetic check is
+not the 20 owner-labelled job production release gate, so the production backlog remains locked.
+
 Local operations:
 
 ```bash
 vercel env pull .env.local --environment=production
-npm run jobs:collect                 # visible Chrome Google X-ray + direct portals
-npm run jobs:collect -- --headless --skip-google  # unattended direct portals
-npm run jobs:model                   # macOS development only; do not start the retired 14B service
+npm run jobs:collect                 # visible Chrome sources=linkedin,wellfound,google,bing
+npm run jobs:collect -- --headless --sources=linkedin,wellfound  # explicit portal-only run
+npm run jobs:model                   # macOS development only; Qwen3-4B loopback helper
 npm run jobs:worker                  # existing direct-Neon worker; being replaced for Windows
 npm run jobs:install                 # macOS launch agents; do not run on Windows
 ```

@@ -26,6 +26,9 @@ const providers = await import("../server/job-search/providers.js");
 const schemas = await import("../server/job-search/schemas.js");
 const cardFacts = await import("../server/job-search/card-facts.js");
 const workflow = await import("../server/job-search/workflow.js");
+const workerContract = await import("../server/job-search/worker-contract.js");
+const resourceGuard = await import("../scripts/job-search-windows-resource-guard.mjs");
+const windowsCollector = await import("../server/job-search/windows-collector.js");
 
 test.beforeEach(async () => {
   await rm(path.join(tempDir, "job-search-intelligence.json"), { force: true });
@@ -64,6 +67,7 @@ async function seedJob(overrides = {}) {
     contentHash: overrides.contentHash || `hash_${Math.random()}`,
     roleFamilyId: overrides.roleFamilyId || "ai_product_platform",
     status: overrides.status || "deep_review_pending",
+    disposition: overrides.disposition,
     details: overrides.details || {},
   });
 }
@@ -144,6 +148,99 @@ test("metadata-first discovery retains incomplete URLs before page extraction", 
   assert.match(dashboard.discoveryLeads[0].url, /4437322106/);
 });
 
+test("relative discovery timestamps normalize safely and preserve unreliable raw text", async () => {
+  const [lead] = await repository.recordDiscoveryLeads([{
+    url: "https://wellfound.com/jobs/1001",
+    title: "Director, AI Strategy",
+    company: "Example",
+    sourceProvider: "wellfound",
+    sourceQuery: "wellfound:test",
+    postedAt: "30+ days ago",
+    status: "extraction_pending",
+    ontology: { eligible: true },
+  }]);
+  assert.equal(lead.postedAt, null);
+  assert.equal(lead.raw.postedAtRaw, "30+ days ago");
+
+  const [normalized] = await workflow.persistExtractedJobs([{
+    sourceId: "relative_timestamp_job",
+    title: "Director, AI Strategy",
+    company: "Example",
+    location: "Remote",
+    description: "Lead AI strategy and analytics programs across global financial-services products.",
+    url: "https://example.com/jobs/relative",
+    postedAt: "6 hours ago",
+    sourceProvider: "linkedin",
+    sourceQuery: "linkedin:test",
+    raw: {},
+  }]);
+  assert.match(normalized.postedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+  const [unreliable] = await workflow.persistExtractedJobs([{
+    sourceId: "unreliable_timestamp_job",
+    title: "Director, AI Strategy",
+    company: "Example",
+    location: "Remote",
+    description: "Lead AI strategy and analytics programs across global financial-services products.",
+    url: "https://example.com/jobs/unreliable",
+    postedAt: "30+ days ago",
+    sourceProvider: "linkedin",
+    sourceQuery: "linkedin:test",
+    raw: {},
+  }]);
+  assert.equal(unreliable.postedAt, null);
+  assert.equal(unreliable.details.sourceMetadata.postedAtRaw, "30+ days ago");
+});
+
+test("Windows collector source selection, parsing, and dedupe prefer richer canonical jobs", () => {
+  assert.deepEqual(windowsCollector.normalizeCollectorSources("linkedin,google"), ["linkedin", "google"]);
+  assert.deepEqual(windowsCollector.normalizeCollectorSources(""), ["linkedin", "wellfound", "google", "bing"]);
+
+  const linkedInHtml = `
+    <ul class="jobs-search__results-list">
+      <li>
+        <a href="https://www.linkedin.com/jobs/view/example-role-4437322106/?trk=public_jobs">
+          <h3>Director, AI Strategy</h3>
+          <h4>Example Fintech</h4>
+          <span class="job-search-card__location">Remote</span>
+          <time>6 hours ago</time>
+        </a>
+      </li>
+    </ul>`;
+  const wellfoundHtml = `
+    <a href="https://wellfound.com/jobs/998877-director-ai-strategy">
+      <h2>Director, AI Strategy</h2>
+      <div data-test="StartupName">Example Fintech</div>
+      <div data-test="Location">Remote</div>
+      <time>yesterday</time>
+    </a>`;
+  const linkedInJobs = windowsCollector.extractLinkedInJobsFromHtml(linkedInHtml, { sourceQuery: "linkedin:sample" });
+  const wellfoundJobs = windowsCollector.extractWellfoundJobsFromHtml(wellfoundHtml, { sourceQuery: "wellfound:sample" });
+  assert.equal(linkedInJobs.length, 1);
+  assert.equal(wellfoundJobs.length, 1);
+  assert.equal(linkedInJobs[0].company, "Example Fintech");
+  assert.equal(wellfoundJobs[0].company, "Example Fintech");
+
+  const deduped = windowsCollector.dedupeCollectorJobs([
+    {
+      ...linkedInJobs[0],
+      url: "https://jobs.lever.co/example/abc123",
+      canonicalUrl: "https://jobs.lever.co/example/abc123",
+      raw: { collector: { portalId: "4437322106", atsId: "abc123" } },
+      description: "Short description",
+    },
+    {
+      ...linkedInJobs[0],
+      url: "https://jobs.lever.co/example/abc123",
+      canonicalUrl: "https://jobs.lever.co/example/abc123",
+      raw: { collector: { portalId: "4437322106", atsId: "abc123" } },
+      description: "Longer grounded description for the same job that should win the dedupe.",
+    },
+  ]);
+  assert.equal(deduped.length, 1);
+  assert.match(deduped[0].description, /Longer grounded description/);
+});
+
 test("local work queue is idempotent and leases one task at a time", async () => {
   const job = await seedJob({ sourceId: "local_queue" });
   const first = await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: "hash:v1" });
@@ -152,9 +249,153 @@ test("local work queue is idempotent and leases one task at a time", async () =>
   const claimed = await repository.claimLocalTask({ workerId: "test-worker" });
   assert.equal(claimed.id, first.id);
   assert.equal(claimed.status, "processing");
+  assert.match(claimed.leaseToken, /^lease_/);
   assert.equal(await repository.claimLocalTask({ workerId: "test-worker-2" }), null);
+  await assert.rejects(
+    repository.renewLocalTaskLease(first.id, { workerId: "test-worker", leaseToken: "lease_invalid_invalid_invalid" }),
+    /lease token is invalid/,
+  );
+  const renewed = await repository.renewLocalTaskLease(first.id, {
+    workerId: "test-worker",
+    leaseToken: claimed.leaseToken,
+  });
+  assert.ok(new Date(renewed.leaseUntil) > new Date());
   const completed = await repository.completeLocalTask(first.id, { ok: true });
   assert.equal(completed.status, "completed");
+});
+
+test("queue hold and controlled release preserve history and only activate the released cohort", async () => {
+  process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
+  try {
+    for (let index = 0; index < 15; index += 1) {
+      const job = await seedJob({
+        sourceId: `held_deep_${index}`,
+        status: "deep_review_pending",
+        details: {
+          triageStatus: "complete",
+          triage: { relevance: index < 10 ? "relevant" : "uncertain", confidence: 0.8, codingIntensity: "low" },
+        },
+      });
+      const task = await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: `deep_${index}` });
+      assert.equal(task.status, "queued");
+    }
+    for (let index = 0; index < 5; index += 1) {
+      const job = await seedJob({
+        sourceId: `held_critic_${index}`,
+        status: "critic_pending",
+        details: {
+          triageStatus: "complete",
+          triage: { relevance: "relevant", confidence: 0.9, codingIntensity: "low" },
+          deepStatus: "complete",
+          deepEvaluation: { verdict: "apply", overallScore: 90 - index },
+        },
+      });
+      await repository.enqueueLocalTask({ jobId: job.id, taskType: "critic", revision: `critic_${index}` });
+    }
+    const mismatch = await seedJob({
+      sourceId: "clear_mismatch_not_promoted",
+      status: "triage_rejected",
+      details: {
+        triageStatus: "complete",
+        triage: { relevance: "irrelevant", confidence: 0.98, codingIntensity: "low" },
+      },
+    });
+    await repository.enqueueLocalTask({ jobId: mismatch.id, taskType: "deep", revision: "mismatch_should_hold" });
+    const promoted = await seedJob({
+      sourceId: "clear_mismatch_promoted",
+      status: "needs_review",
+      disposition: "maybe",
+      details: {
+        triageStatus: "complete",
+        triage: { relevance: "irrelevant", confidence: 0.95, codingIntensity: "low" },
+      },
+    });
+    await repository.enqueueLocalTask({ jobId: promoted.id, taskType: "deep", revision: "mismatch_promoted" });
+
+    const held = await workflow.reconcileHeldWindowsQueue({
+      operationKey: "hold-operation-001",
+      dryRun: false,
+      reason: "windows_migration_precalibration",
+    });
+    assert.equal(held.queueControlAfter.holdNewTasks, true);
+    assert.equal(held.queueCounts.after.byStatus.held, 22);
+
+    const release = await workflow.releaseHeldWindowsBacklog({
+      operationKey: "release-operation-001",
+      dryRun: false,
+      limit: 20,
+    });
+    assert.equal(release.selectedCount, 20);
+    assert.equal(release.queueControlAfter.activeReleaseJobIds.length, 20);
+    assert.equal(release.selected.some((item) => item.sourceId === "clear_mismatch_not_promoted"), false);
+    assert.equal(release.selected.some((item) => item.sourceId === "clear_mismatch_promoted"), true);
+
+    const claim = await repository.claimLocalTask({ workerId: "migration-test-worker" });
+    assert.ok(release.queueControlAfter.activeReleaseJobIds.includes(claim.jobId));
+    const status = await repository.getLocalWorkerStatus();
+    assert.equal(status.queueControl.holdNewTasks, true);
+  } finally {
+    delete process.env.JOBSEARCH_LOCAL_WORKER_ENABLED;
+  }
+});
+
+test("Windows worker contract bounds evidence and requires grounded claims", async () => {
+  const job = await seedJob({
+    sourceId: "worker_contract",
+    description: "A".repeat(20_000),
+    details: {
+      sourceEvidence: [{
+        claimType: "remote",
+        value: "Remote in India",
+        sourceUrl: "https://example.com/jobs/1",
+        supportingPassage: "This role may be performed remotely from India.",
+        confidence: 1,
+        evidenceType: "explicit",
+      }],
+      databaseUrl: "must-not-leave-server",
+    },
+  });
+  const task = await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: "worker-contract" });
+  const packet = workerContract.buildWorkerPacket({ task: { ...task, attempts: 1 }, job, feedbackExamples: [] });
+  assert.equal(packet.job.description.length, workerContract.WORKER_LIMITS.maxDescriptionCharacters);
+  assert.equal(JSON.stringify(packet).includes("must-not-leave-server"), false);
+  assert.equal(packet.constraints.allowedModelTier, "qwen3-4b-q4_k_m");
+  assert.throws(() => workerContract.parseWorkerOutput("deep", {
+    extraction: { claims: [], unknowns: [] },
+    evaluation: {
+      verdict: "maybe",
+      overallScore: 60,
+      summary: "Potential fit.",
+      dimensions: Object.fromEntries([
+        "roleFit", "financialServicesAdvantage", "aiDataRelevance", "leadershipLevel",
+        "codingInterviewRisk", "locationAuthorization", "compensationUpside", "companyQuality", "interviewVelocity",
+      ].map((name) => [name, { score: 3, reasoning: "Uncertain." }])),
+      claims: [{
+        claimType: "visa",
+        value: "Sponsorship available",
+        sourceUrl: "",
+        supportingPassage: "",
+        sourceDate: "",
+        confidence: 0.9,
+        evidenceType: "inferred",
+      }],
+      redFlags: [], greenFlags: [], unknowns: [], outreachAngle: "",
+    },
+  }), /Invalid URL|Too small/i);
+});
+
+test("Windows resource guard permits this model tier and always rejects Qwen3-14B", () => {
+  assert.equal(resourceGuard.assertApprovedWindowsModel("Qwen3-4B-Q4_K_M.gguf"), true);
+  assert.throws(() => resourceGuard.assertApprovedWindowsModel("Qwen3-14B-Q4_K_M.gguf"), /prohibited/);
+  assert.throws(() => resourceGuard.assertApprovedWindowsModel("Qwen3-8B-Q4_K_M.gguf"), /approved only/);
+  const evaluation = resourceGuard.evaluateResourceGuard({
+    memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 8 * (1024 ** 3) },
+    disk: { freeBytes: 100 * (1024 ** 3) },
+    cpu: { loadPercent: 25 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500 },
+  }, { phase: "startup" });
+  assert.equal(evaluation.ok, true);
+  assert.equal(evaluation.summary.totalVramMiB, 6144);
 });
 
 test("ATS detector recognizes Greenhouse, Lever, Ashby, Workday, and SmartRecruiters", () => {
@@ -368,7 +609,7 @@ function validTriagePayload() {
   };
 }
 
-test("free model routing falls back from Groq rate limits to Cloudflare", async () => {
+test("free model routing falls back from Cloudflare to Groq GPT-OSS", async () => {
   const originalFetch = globalThis.fetch;
   Object.assign(process.env, {
     GROQ_API_KEY: "test-groq",
@@ -380,11 +621,11 @@ test("free model routing falls back from Groq rate limits to Cloudflare", async 
   const calls = [];
   globalThis.fetch = async (url) => {
     calls.push(String(url));
-    if (String(url).includes("api.groq.com")) {
-      return mockModelResponse({ error: { message: "Rate limit reached" } }, 429);
+    if (String(url).includes("api.cloudflare.com")) {
+      return mockModelResponse({ error: { message: "Provider unavailable" } }, 503);
     }
     return mockModelResponse({
-      model: "@cf/meta/llama-3.1-8b-instruct-fast",
+      model: "openai/gpt-oss-120b",
       choices: [{ message: { content: JSON.stringify(validTriagePayload()) }, finish_reason: "stop" }],
       usage: { prompt_tokens: 120, completion_tokens: 80 },
     });
@@ -396,8 +637,8 @@ test("free model routing falls back from Groq rate limits to Cloudflare", async 
       messages: [{ role: "user", content: "Return the requested JSON for router_job." }],
     });
     assert.equal(response.status, "live");
-    assert.equal(response.provider, "cloudflare");
-    assert.deepEqual(response.attempts.map((attempt) => attempt.status), ["rate_limited", "live"]);
+    assert.equal(response.provider, "groq");
+    assert.deepEqual(response.attempts.map((attempt) => attempt.status), ["provider_unavailable", "live"]);
     assert.equal(calls.length, 2);
   } finally {
     globalThis.fetch = originalFetch;
@@ -417,9 +658,9 @@ test("invalid structured output falls through to the next free provider", async 
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.ZAI_API_KEY;
   globalThis.fetch = async (url) => mockModelResponse({
-    model: String(url).includes("groq") ? "qwen/qwen3-32b" : "@cf/meta/llama-3.1-8b-instruct-fast",
+    model: String(url).includes("groq") ? "openai/gpt-oss-120b" : "@cf/meta/llama-3.1-8b-instruct-fast",
     choices: [{
-      message: { content: String(url).includes("groq") ? "not-json" : JSON.stringify(validTriagePayload()) },
+      message: { content: String(url).includes("cloudflare") ? "not-json" : JSON.stringify(validTriagePayload()) },
       finish_reason: "stop",
     }],
     usage: { prompt_tokens: 100, completion_tokens: 60 },
@@ -430,7 +671,7 @@ test("invalid structured output falls through to the next free provider", async 
       schema: schemas.triageBatchSchema,
       messages: [{ role: "user", content: "Return JSON." }],
     });
-    assert.equal(response.provider, "cloudflare");
+    assert.equal(response.provider, "groq");
     assert.deepEqual(response.attempts.map((attempt) => attempt.status), ["invalid_response", "live"]);
   } finally {
     globalThis.fetch = originalFetch;

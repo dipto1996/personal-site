@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { seedTitlePatterns } from "./taxonomy.js";
+import { normalizeTimestampInput } from "./utils.js";
 
 const DATABASE_URL = process.env.DATABASE_URL || "";
 const DATA_DIR = process.env.TRADEGRAPH_DATA_DIR
@@ -28,6 +29,15 @@ const EMPTY_LOCAL = {
   workerHeartbeats: [],
   metadata: {},
 };
+
+const QUEUE_CONTROL_KEY = "local_queue_control_v1";
+const CONTROL_OPERATION_KEY_PREFIX = "control_operation_v1";
+const DEFAULT_QUEUE_CONTROL = Object.freeze({
+  holdNewTasks: false,
+  holdReason: "",
+  activeReleaseJobIds: [],
+  updatedAt: null,
+});
 
 let schemaReady = false;
 let localWriteChain = Promise.resolve();
@@ -64,6 +74,47 @@ function leadDedupeKey(lead) {
   const identity = canonicalLeadUrl(lead.url)
     || `${lead.sourceProvider || "unknown"}|${lead.externalId || ""}|${lead.title || ""}|${lead.company || ""}|${lead.location || ""}`;
   return createHash("md5").update(identity.toLowerCase()).digest("hex");
+}
+
+function metadataKey(type, operationKey) {
+  return `${CONTROL_OPERATION_KEY_PREFIX}:${type}:${String(operationKey || "").trim()}`;
+}
+
+function normalizeQueueControl(value = {}) {
+  const activeReleaseJobIds = [...new Set((Array.isArray(value.activeReleaseJobIds) ? value.activeReleaseJobIds : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean))].slice(0, 5000);
+  return {
+    holdNewTasks: value.holdNewTasks === true,
+    holdReason: String(value.holdReason || "").trim().slice(0, 500),
+    activeReleaseJobIds,
+    updatedAt: value.updatedAt || null,
+  };
+}
+
+async function readMetadataValue(key) {
+  await ensureJobSearchRepository();
+  if (!hasDatabase()) {
+    return (await readLocal()).metadata?.[key] ?? null;
+  }
+  const sql = getSql();
+  const [row] = await sql`SELECT value FROM js_schema_meta WHERE key=${key}`;
+  return row?.value ?? null;
+}
+
+async function writeMetadataValue(key, value) {
+  await ensureJobSearchRepository();
+  if (!hasDatabase()) {
+    return mutateLocal((db) => {
+      db.metadata = { ...(db.metadata || {}), [key]: value };
+      return value;
+    });
+  }
+  const sql = getSql();
+  await sql`INSERT INTO js_schema_meta (key, value, updated_at)
+    VALUES (${key}, ${JSON.stringify(value)}, NOW())
+    ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()`;
+  return value;
 }
 
 async function ensureLocal() {
@@ -295,10 +346,14 @@ async function ensureDatabaseSchema() {
       available_at TIMESTAMPTZ NOT NULL,
       lease_until TIMESTAMPTZ,
       leased_by TEXT,
+      lease_token TEXT,
+      result_id TEXT,
       created_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL,
       completed_at TIMESTAMPTZ
     )`,
+    sql`ALTER TABLE js_local_tasks ADD COLUMN IF NOT EXISTS lease_token TEXT`,
+    sql`ALTER TABLE js_local_tasks ADD COLUMN IF NOT EXISTS result_id TEXT`,
     sql`CREATE INDEX IF NOT EXISTS js_local_tasks_queue_idx
       ON js_local_tasks(status, available_at, priority DESC, created_at)`,
     sql`CREATE TABLE IF NOT EXISTS js_worker_heartbeats (
@@ -403,10 +458,42 @@ export async function ensureJobSearchRepository() {
   });
 }
 
-export async function createRun({ trigger = "manual", status = "queued", phase = "queued" } = {}) {
+export async function getLocalQueueControl() {
+  return normalizeQueueControl(await readMetadataValue(QUEUE_CONTROL_KEY) || DEFAULT_QUEUE_CONTROL);
+}
+
+export async function setLocalQueueControl(patch = {}) {
+  const current = await getLocalQueueControl();
+  const next = normalizeQueueControl({ ...current, ...patch, updatedAt: nowIso() });
+  await writeMetadataValue(QUEUE_CONTROL_KEY, next);
+  return next;
+}
+
+export async function getControlOperation(type, operationKey) {
+  if (!String(type || "").trim() || !String(operationKey || "").trim()) return null;
+  return await readMetadataValue(metadataKey(type, operationKey));
+}
+
+export async function saveControlOperation(type, operationKey, value) {
+  if (!String(type || "").trim() || !String(operationKey || "").trim()) {
+    throw new Error("A control operation type and key are required.");
+  }
+  return writeMetadataValue(metadataKey(type, operationKey), {
+    ...value,
+    type,
+    operationKey: String(operationKey).trim(),
+    storedAt: nowIso(),
+  });
+}
+
+export async function createRun({ id: providedId = "", trigger = "manual", status = "queued", phase = "queued" } = {}) {
   await ensureJobSearchRepository();
+  if (providedId) {
+    const existing = await getRun(providedId);
+    if (existing) return existing;
+  }
   const run = {
-    id: id("jsrun"),
+    id: providedId || id("jsrun"),
     trigger,
     status,
     phase,
@@ -483,6 +570,13 @@ export async function listRuns(limit = 20) {
 export async function upsertJob(job) {
   await ensureJobSearchRepository();
   const now = nowIso();
+  const timestamp = normalizeTimestampInput(job.postedAt);
+  const sourceMetadata = {
+    ...(job.details?.sourceMetadata || {}),
+    ...(job.postedAtRaw || (!timestamp.iso && timestamp.raw) ? {
+      postedAtRaw: String(job.postedAtRaw || timestamp.raw || "").trim().slice(0, 200),
+    } : {}),
+  };
   const record = {
     id: job.id || id("jsjob"),
     sourceId: job.sourceId,
@@ -492,14 +586,16 @@ export async function upsertJob(job) {
     company: job.company,
     location: job.location || "",
     description: job.description,
-    postedAt: job.postedAt || null,
+    postedAt: timestamp.iso,
     sourceProvider: job.sourceProvider || "unknown",
     sourceQuery: job.sourceQuery || "",
     contentHash: job.contentHash,
     roleFamilyId: job.roleFamilyId || null,
     status: job.status || "discovered",
     disposition: job.disposition || null,
-    details: job.details || {},
+    details: Object.keys(sourceMetadata).length
+      ? { ...(job.details || {}), sourceMetadata }
+      : (job.details || {}),
     firstSeenAt: job.firstSeenAt || now,
     lastSeenAt: now,
     createdAt: job.createdAt || now,
@@ -591,6 +687,7 @@ export async function listJobs({ view = "inbox", limit = 500 } = {}) {
 export async function upsertDiscoveryLead(lead) {
   await ensureJobSearchRepository();
   const timestamp = nowIso();
+  const postedTimestamp = normalizeTimestampInput(lead.postedAt);
   const record = {
     id: lead.id || id("jslead"),
     dedupeKey: lead.dedupeKey || leadDedupeKey(lead),
@@ -600,13 +697,18 @@ export async function upsertDiscoveryLead(lead) {
     title: String(lead.title || "").trim(),
     company: String(lead.company || "").trim(),
     location: String(lead.location || "").trim(),
-    postedAt: lead.postedAt || null,
+    postedAt: postedTimestamp.iso,
     sourceProvider: lead.sourceProvider || "unknown",
     sourceQuery: lead.sourceQuery || "",
     snippet: String(lead.snippet || lead.description || "").trim().slice(0, 3000),
     status: lead.status || "discovered",
     ontology: lead.ontology || {},
-    raw: lead.raw || {},
+    raw: {
+      ...(lead.raw || {}),
+      ...(lead.postedAtRaw || postedTimestamp.raw ? {
+        postedAtRaw: String(lead.postedAtRaw || postedTimestamp.raw || "").trim().slice(0, 200),
+      } : {}),
+    },
     firstSeenAt: lead.firstSeenAt || timestamp,
     lastSeenAt: timestamp,
     createdAt: lead.createdAt || timestamp,
@@ -893,22 +995,28 @@ export async function rollbackTitlePattern(patternId) {
   return saveTitlePattern({ ...previous, metrics: { ...(previous.metrics || {}), rolledBackAt: nowIso() } });
 }
 
-export async function recordEvaluation({ jobId, runId, stage, provider, model, promptVersion, verdict, score, output, usage }) {
+export async function recordEvaluation({ id: evaluationId, jobId, runId, stage, provider, model, promptVersion, verdict, score, output, usage }) {
   await ensureJobSearchRepository();
   const record = {
-    id: id("jseval"), jobId, runId: runId || null, stage, provider, model, promptVersion,
+    id: evaluationId || id("jseval"), jobId, runId: runId || null, stage, provider, model, promptVersion,
     verdict: verdict || null, score: Number.isFinite(Number(score)) ? Number(score) : null,
     output: output || {}, inputTokens: Number(usage?.inputTokens) || 0,
     outputTokens: Number(usage?.outputTokens) || 0, estimatedCostUsd: Number(usage?.estimatedCostUsd) || 0,
     createdAt: nowIso(),
   };
-  if (!hasDatabase()) return mutateLocal((db) => { db.evaluations.push(record); return record; });
+  if (!hasDatabase()) return mutateLocal((db) => {
+    const existing = db.evaluations.find((evaluation) => evaluation.id === record.id);
+    if (existing) return existing;
+    db.evaluations.push(record);
+    return record;
+  });
   const sql = getSql();
   await sql`INSERT INTO js_evaluations (id, job_id, run_id, stage, provider, model, prompt_version,
     verdict, score, output, input_tokens, output_tokens, estimated_cost_usd, created_at)
     VALUES (${record.id}, ${jobId}, ${record.runId}, ${stage}, ${provider}, ${model}, ${promptVersion},
     ${record.verdict}, ${record.score}, ${JSON.stringify(record.output)}, ${record.inputTokens},
-    ${record.outputTokens}, ${record.estimatedCostUsd}, ${record.createdAt})`;
+    ${record.outputTokens}, ${record.estimatedCostUsd}, ${record.createdAt})
+    ON CONFLICT (id) DO NOTHING`;
   return record;
 }
 
@@ -1055,19 +1163,99 @@ export async function getProviderUsageSince(provider, sinceIso) {
   };
 }
 
+export async function listLocalTasks({ statuses = [], taskTypes = [], limit = 5000 } = {}) {
+  await ensureJobSearchRepository();
+  if (!hasDatabase()) {
+    return (await readLocal()).localTasks
+      .filter((task) => (!statuses.length || statuses.includes(task.status)) && (!taskTypes.length || taskTypes.includes(task.taskType)))
+      .sort((left, right) => right.priority - left.priority || left.createdAt.localeCompare(right.createdAt))
+      .slice(0, limit);
+  }
+  const sql = getSql();
+  const rows = await sql`SELECT id, task_key AS "taskKey", job_id AS "jobId",
+    task_type AS "taskType", status, priority, attempts, payload, result,
+    last_error AS "lastError", available_at AS "availableAt", lease_until AS "leaseUntil",
+    leased_by AS "leasedBy", lease_token AS "leaseToken", result_id AS "resultId",
+    created_at AS "createdAt", updated_at AS "updatedAt", completed_at AS "completedAt"
+    FROM js_local_tasks ORDER BY priority DESC, created_at ASC LIMIT ${limit}`;
+  return rows.filter((task) => (!statuses.length || statuses.includes(task.status)) && (!taskTypes.length || taskTypes.includes(task.taskType)));
+}
+
+export async function setLocalTaskStatus(taskId, {
+  status,
+  availableAt = null,
+  clearLease = true,
+  completedAt = null,
+  result = null,
+  lastError = null,
+} = {}) {
+  await ensureJobSearchRepository();
+  if (!String(taskId || "").trim()) throw new Error("A local task id is required.");
+  if (!String(status || "").trim()) throw new Error("A local task status is required.");
+  const timestamp = nowIso();
+  if (!hasDatabase()) {
+    return mutateLocal((db) => {
+      const task = db.localTasks.find((item) => item.id === taskId);
+      if (!task) return null;
+      task.status = status;
+      task.availableAt = availableAt || task.availableAt;
+      task.updatedAt = timestamp;
+      if (clearLease) {
+        task.leaseUntil = null;
+        task.leasedBy = "";
+        task.leaseToken = "";
+      }
+      if (completedAt !== null) task.completedAt = completedAt;
+      if (result !== null) task.result = result;
+      if (lastError !== null) task.lastError = lastError;
+      return structuredClone(task);
+    });
+  }
+  const sql = getSql();
+  const [row] = await sql`UPDATE js_local_tasks SET
+    status=${status},
+    available_at=COALESCE(${availableAt}, available_at),
+    lease_until=CASE WHEN ${clearLease} THEN NULL ELSE lease_until END,
+    leased_by=CASE WHEN ${clearLease} THEN NULL ELSE leased_by END,
+    lease_token=CASE WHEN ${clearLease} THEN NULL ELSE lease_token END,
+    completed_at=CASE WHEN ${completedAt === null} THEN completed_at ELSE ${completedAt} END,
+    result=CASE WHEN ${result === null} THEN result ELSE ${JSON.stringify(result)}::jsonb END,
+    last_error=CASE WHEN ${lastError === null} THEN last_error ELSE ${lastError} END,
+    updated_at=${timestamp}
+    WHERE id=${taskId}
+    RETURNING id, task_key AS "taskKey", job_id AS "jobId", task_type AS "taskType",
+      status, priority, attempts, payload, result, last_error AS "lastError",
+      available_at AS "availableAt", lease_until AS "leaseUntil", leased_by AS "leasedBy",
+      lease_token AS "leaseToken", result_id AS "resultId",
+      created_at AS "createdAt", updated_at AS "updatedAt", completed_at AS "completedAt"`;
+  return row || null;
+}
+
 export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority = 0, revision = "v1" }) {
   await ensureJobSearchRepository();
   const timestamp = nowIso();
+  const queueControl = await getLocalQueueControl();
+  const startHeld = queueControl.holdNewTasks && !queueControl.activeReleaseJobIds.includes(String(jobId || "").trim());
   const taskKey = createHash("sha256").update(`${jobId}|${taskType}|${revision}`).digest("hex");
   const record = {
-    id: id("jstask"), taskKey, jobId, taskType, status: "queued", priority,
+    id: id("jstask"), taskKey, jobId, taskType, status: startHeld ? "held" : "queued", priority,
     attempts: 0, payload, result: {}, lastError: "", availableAt: timestamp,
-    leaseUntil: null, leasedBy: "", createdAt: timestamp, updatedAt: timestamp, completedAt: null,
+    leaseUntil: null, leasedBy: "", leaseToken: "", resultId: "",
+    createdAt: timestamp, updatedAt: timestamp, completedAt: null,
   };
   if (!hasDatabase()) {
     return mutateLocal((db) => {
       const existing = db.localTasks.find((task) => task.taskKey === taskKey);
-      if (existing) return existing;
+      if (existing) {
+        existing.priority = Math.max(Number(existing.priority) || 0, record.priority);
+        existing.payload = { ...(existing.payload || {}), ...(record.payload || {}) };
+        if (existing.status === "held" && !startHeld) {
+          existing.status = "queued";
+          existing.availableAt = timestamp;
+        }
+        existing.updatedAt = timestamp;
+        return structuredClone(existing);
+      }
       db.localTasks.push(record);
       return record;
     });
@@ -1075,26 +1263,129 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
   const sql = getSql();
   const [row] = await sql`INSERT INTO js_local_tasks (
     id, task_key, job_id, task_type, status, priority, attempts, payload, result,
-    last_error, available_at, lease_until, leased_by, created_at, updated_at, completed_at
+    last_error, available_at, lease_until, leased_by, lease_token, result_id,
+    created_at, updated_at, completed_at
   ) VALUES (
     ${record.id}, ${record.taskKey}, ${record.jobId}, ${record.taskType}, ${record.status},
     ${record.priority}, 0, ${JSON.stringify(record.payload)}, '{}'::jsonb, NULL,
-    ${record.availableAt}, NULL, NULL, ${record.createdAt}, ${record.updatedAt}, NULL
+    ${record.availableAt}, NULL, NULL, NULL, NULL, ${record.createdAt}, ${record.updatedAt}, NULL
   ) ON CONFLICT (task_key) DO UPDATE SET
     priority=GREATEST(js_local_tasks.priority, EXCLUDED.priority),
     payload=js_local_tasks.payload || EXCLUDED.payload,
+    status=CASE
+      WHEN js_local_tasks.status='held' AND EXCLUDED.status='queued' THEN 'queued'
+      ELSE js_local_tasks.status
+    END,
+    available_at=CASE
+      WHEN js_local_tasks.status='held' AND EXCLUDED.status='queued' THEN EXCLUDED.available_at
+      ELSE js_local_tasks.available_at
+    END,
     updated_at=EXCLUDED.updated_at
   RETURNING id, task_key AS "taskKey", job_id AS "jobId", task_type AS "taskType",
     status, priority, attempts, payload, result, last_error AS "lastError",
     available_at AS "availableAt", lease_until AS "leaseUntil", leased_by AS "leasedBy",
+    lease_token AS "leaseToken", result_id AS "resultId",
     created_at AS "createdAt", updated_at AS "updatedAt", completed_at AS "completedAt"`;
   return row;
 }
 
-export async function claimLocalTask({ workerId, leaseSeconds = 900 } = {}) {
+export async function holdLocalQueueTasks({
+  statuses = ["queued", "retry"],
+  includeExpiredProcessing = false,
+  reason = "migration_hold",
+} = {}) {
   await ensureJobSearchRepository();
   const now = new Date();
-  const leaseUntil = new Date(now.getTime() + leaseSeconds * 1000).toISOString();
+  const availableAt = now.toISOString();
+  const filter = (task) => (
+    (statuses.includes(task.status))
+    || (includeExpiredProcessing && task.status === "processing" && task.leaseUntil && new Date(task.leaseUntil) <= now)
+  );
+  if (!hasDatabase()) {
+    return mutateLocal((db) => {
+      const held = [];
+      db.localTasks.forEach((task) => {
+        if (!filter(task)) return;
+        Object.assign(task, {
+          status: "held",
+          availableAt,
+          leaseUntil: null,
+          leasedBy: "",
+          leaseToken: "",
+          updatedAt: availableAt,
+          lastError: task.lastError || `Held: ${reason}`,
+        });
+        held.push(structuredClone(task));
+      });
+      return held;
+    });
+  }
+  const sql = getSql();
+  return sql`UPDATE js_local_tasks SET
+    status='held',
+    available_at=${availableAt},
+    lease_until=NULL,
+    leased_by=NULL,
+    lease_token=NULL,
+    updated_at=${availableAt},
+    last_error=COALESCE(last_error, ${`Held: ${reason}`})
+    WHERE (
+      status = ANY(${statuses})
+      OR (${includeExpiredProcessing} = true AND status='processing' AND lease_until <= NOW())
+    )
+    RETURNING id, task_key AS "taskKey", job_id AS "jobId", task_type AS "taskType",
+      status, priority, attempts, payload, result, last_error AS "lastError",
+      available_at AS "availableAt", lease_until AS "leaseUntil", leased_by AS "leasedBy",
+      lease_token AS "leaseToken", result_id AS "resultId",
+      created_at AS "createdAt", updated_at AS "updatedAt", completed_at AS "completedAt"`;
+}
+
+export async function releaseLocalQueueTasks(taskIds = []) {
+  await ensureJobSearchRepository();
+  const ids = [...new Set((Array.isArray(taskIds) ? taskIds : []).map((item) => String(item || "").trim()).filter(Boolean))];
+  if (!ids.length) return [];
+  const availableAt = nowIso();
+  if (!hasDatabase()) {
+    return mutateLocal((db) => {
+      const released = [];
+      db.localTasks.forEach((task) => {
+        if (!ids.includes(task.id) || task.status !== "held") return;
+        Object.assign(task, {
+          status: "queued",
+          availableAt,
+          leaseUntil: null,
+          leasedBy: "",
+          leaseToken: "",
+          updatedAt: availableAt,
+        });
+        released.push(structuredClone(task));
+      });
+      return released;
+    });
+  }
+  const sql = getSql();
+  return sql`UPDATE js_local_tasks SET
+    status='queued',
+    available_at=${availableAt},
+    lease_until=NULL,
+    leased_by=NULL,
+    lease_token=NULL,
+    updated_at=${availableAt}
+    WHERE id = ANY(${ids}) AND status='held'
+    RETURNING id, task_key AS "taskKey", job_id AS "jobId", task_type AS "taskType",
+      status, priority, attempts, payload, result, last_error AS "lastError",
+      available_at AS "availableAt", lease_until AS "leaseUntil", leased_by AS "leasedBy",
+      lease_token AS "leaseToken", result_id AS "resultId",
+      created_at AS "createdAt", updated_at AS "updatedAt", completed_at AS "completedAt"`;
+}
+
+export async function claimLocalTask({ workerId, leaseSeconds = 900 } = {}) {
+  await ensureJobSearchRepository();
+  if (!String(workerId || "").trim()) throw new Error("workerId is required to claim a task.");
+  const now = new Date();
+  const boundedLeaseSeconds = Math.max(60, Math.min(3600, Number(leaseSeconds) || 900));
+  const leaseUntil = new Date(now.getTime() + boundedLeaseSeconds * 1000).toISOString();
+  const leaseToken = id("lease");
   if (!hasDatabase()) {
     return mutateLocal((db) => {
       const candidates = db.localTasks
@@ -1107,7 +1398,7 @@ export async function claimLocalTask({ workerId, leaseSeconds = 900 } = {}) {
       if (!task) return null;
       Object.assign(task, {
         status: "processing", attempts: task.attempts + 1, leasedBy: workerId,
-        leaseUntil, updatedAt: now.toISOString(), lastError: "",
+        leaseUntil, leaseToken, resultId: "", updatedAt: now.toISOString(), lastError: "",
       });
       return structuredClone(task);
     });
@@ -1122,60 +1413,148 @@ export async function claimLocalTask({ workerId, leaseSeconds = 900 } = {}) {
     LIMIT 1
   )
   UPDATE js_local_tasks task SET status='processing', attempts=task.attempts+1,
-    leased_by=${workerId}, lease_until=${leaseUntil}, last_error=NULL, updated_at=NOW()
+    leased_by=${workerId}, lease_until=${leaseUntil}, lease_token=${leaseToken},
+    result_id=NULL, last_error=NULL, updated_at=NOW()
   FROM candidate WHERE task.id=candidate.id
   RETURNING task.id, task.task_key AS "taskKey", task.job_id AS "jobId",
     task.task_type AS "taskType", task.status, task.priority, task.attempts,
     task.payload, task.result, task.last_error AS "lastError",
     task.available_at AS "availableAt", task.lease_until AS "leaseUntil",
-    task.leased_by AS "leasedBy", task.created_at AS "createdAt",
+    task.leased_by AS "leasedBy", task.lease_token AS "leaseToken",
+    task.result_id AS "resultId", task.created_at AS "createdAt",
     task.updated_at AS "updatedAt", task.completed_at AS "completedAt"`;
   return row || null;
 }
 
-export async function completeLocalTask(taskId, result = {}) {
+export async function getLocalTask(taskId) {
+  await ensureJobSearchRepository();
+  if (!hasDatabase()) {
+    return (await readLocal()).localTasks.find((task) => task.id === taskId) || null;
+  }
+  const sql = getSql();
+  const [row] = await sql`SELECT id, task_key AS "taskKey", job_id AS "jobId",
+    task_type AS "taskType", status, priority, attempts, payload, result,
+    last_error AS "lastError", available_at AS "availableAt", lease_until AS "leaseUntil",
+    leased_by AS "leasedBy", lease_token AS "leaseToken", result_id AS "resultId",
+    created_at AS "createdAt", updated_at AS "updatedAt", completed_at AS "completedAt"
+    FROM js_local_tasks WHERE id=${taskId} LIMIT 1`;
+  return row || null;
+}
+
+function assertTaskLease(task, { workerId, leaseToken, allowCompleted = false } = {}) {
+  if (!task) {
+    const error = new Error("Worker task was not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (allowCompleted && task.status === "completed") return;
+  if (task.status !== "processing") {
+    const error = new Error(`Worker task is not processing (status: ${task.status}).`);
+    error.statusCode = 409;
+    throw error;
+  }
+  if (workerId && task.leasedBy !== workerId) {
+    const error = new Error("Worker task is leased to a different worker.");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (leaseToken && task.leaseToken !== leaseToken) {
+    const error = new Error("Worker task lease token is invalid.");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (task.leaseUntil && new Date(task.leaseUntil).getTime() <= Date.now()) {
+    const error = new Error("Worker task lease has expired.");
+    error.statusCode = 409;
+    throw error;
+  }
+}
+
+export async function renewLocalTaskLease(taskId, { workerId, leaseToken, leaseSeconds = 900 } = {}) {
+  const task = await getLocalTask(taskId);
+  assertTaskLease(task, { workerId, leaseToken });
+  const boundedLeaseSeconds = Math.max(60, Math.min(3600, Number(leaseSeconds) || 900));
+  const leaseUntil = new Date(Date.now() + boundedLeaseSeconds * 1000).toISOString();
+  if (!hasDatabase()) {
+    return mutateLocal((db) => {
+      const current = db.localTasks.find((item) => item.id === taskId);
+      assertTaskLease(current, { workerId, leaseToken });
+      current.leaseUntil = leaseUntil;
+      current.updatedAt = nowIso();
+      return structuredClone(current);
+    });
+  }
+  const sql = getSql();
+  const [row] = await sql`UPDATE js_local_tasks SET lease_until=${leaseUntil}, updated_at=NOW()
+    WHERE id=${taskId} AND status='processing' AND leased_by=${workerId} AND lease_token=${leaseToken}
+    RETURNING id, task_key AS "taskKey", job_id AS "jobId", task_type AS "taskType",
+    status, priority, attempts, payload, result, last_error AS "lastError",
+    available_at AS "availableAt", lease_until AS "leaseUntil", leased_by AS "leasedBy",
+    lease_token AS "leaseToken", result_id AS "resultId", created_at AS "createdAt",
+    updated_at AS "updatedAt", completed_at AS "completedAt"`;
+  if (!row) {
+    const error = new Error("Worker task lease could not be renewed.");
+    error.statusCode = 409;
+    throw error;
+  }
+  return row;
+}
+
+export async function completeLocalTask(taskId, result = {}, { workerId, leaseToken, resultId = "" } = {}) {
   await ensureJobSearchRepository();
   const timestamp = nowIso();
+  const existing = await getLocalTask(taskId);
+  if (existing?.status === "completed" && resultId && existing.resultId === resultId) return existing;
+  if (workerId || leaseToken) assertTaskLease(existing, { workerId, leaseToken });
   if (!hasDatabase()) {
     return mutateLocal((db) => {
       const task = db.localTasks.find((item) => item.id === taskId);
       if (!task) return null;
-      Object.assign(task, { status: "completed", result, leaseUntil: null, leasedBy: "", updatedAt: timestamp, completedAt: timestamp });
+      if (workerId || leaseToken) assertTaskLease(task, { workerId, leaseToken });
+      Object.assign(task, { status: "completed", result, resultId, leaseUntil: null, updatedAt: timestamp, completedAt: timestamp });
       return structuredClone(task);
     });
   }
   const sql = getSql();
   const [row] = await sql`UPDATE js_local_tasks SET status='completed', result=${JSON.stringify(result)},
-    lease_until=NULL, leased_by=NULL, completed_at=${timestamp}, updated_at=${timestamp}
-    WHERE id=${taskId} RETURNING id, task_key AS "taskKey", job_id AS "jobId",
+    result_id=${resultId || null}, lease_until=NULL, completed_at=${timestamp}, updated_at=${timestamp}
+    WHERE id=${taskId}
+      AND (${workerId || null}::text IS NULL OR (status='processing' AND leased_by=${workerId} AND lease_token=${leaseToken}))
+    RETURNING id, task_key AS "taskKey", job_id AS "jobId",
     task_type AS "taskType", status, priority, attempts, payload, result,
     last_error AS "lastError", available_at AS "availableAt", lease_until AS "leaseUntil",
-    leased_by AS "leasedBy", created_at AS "createdAt", updated_at AS "updatedAt",
+    leased_by AS "leasedBy", lease_token AS "leaseToken", result_id AS "resultId",
+    created_at AS "createdAt", updated_at AS "updatedAt",
     completed_at AS "completedAt"`;
   return row || null;
 }
 
-export async function failLocalTask(taskId, error, { retry = true, delaySeconds = 60 } = {}) {
+export async function failLocalTask(taskId, error, { retry = true, delaySeconds = 60, workerId, leaseToken } = {}) {
   await ensureJobSearchRepository();
   const timestamp = nowIso();
   const availableAt = new Date(Date.now() + delaySeconds * 1000).toISOString();
   const message = String(error?.message || error || "Local task failed.").slice(0, 2000);
   const status = retry ? "retry" : "failed";
+  if (workerId || leaseToken) assertTaskLease(await getLocalTask(taskId), { workerId, leaseToken });
   if (!hasDatabase()) {
     return mutateLocal((db) => {
       const task = db.localTasks.find((item) => item.id === taskId);
       if (!task) return null;
-      Object.assign(task, { status, lastError: message, availableAt, leaseUntil: null, leasedBy: "", updatedAt: timestamp });
+      if (workerId || leaseToken) assertTaskLease(task, { workerId, leaseToken });
+      Object.assign(task, { status, lastError: message, availableAt, leaseUntil: null, leaseToken: "", leasedBy: "", updatedAt: timestamp });
       return structuredClone(task);
     });
   }
   const sql = getSql();
   const [row] = await sql`UPDATE js_local_tasks SET status=${status}, last_error=${message},
-    available_at=${availableAt}, lease_until=NULL, leased_by=NULL, updated_at=${timestamp}
-    WHERE id=${taskId} RETURNING id, task_key AS "taskKey", job_id AS "jobId",
+    available_at=${availableAt}, lease_until=NULL, lease_token=NULL, leased_by=NULL, updated_at=${timestamp}
+    WHERE id=${taskId}
+      AND (${workerId || null}::text IS NULL OR (status='processing' AND leased_by=${workerId} AND lease_token=${leaseToken}))
+    RETURNING id, task_key AS "taskKey", job_id AS "jobId",
     task_type AS "taskType", status, priority, attempts, payload, result,
     last_error AS "lastError", available_at AS "availableAt", lease_until AS "leaseUntil",
-    leased_by AS "leasedBy", created_at AS "createdAt", updated_at AS "updatedAt",
+    leased_by AS "leasedBy", lease_token AS "leaseToken", result_id AS "resultId",
+    created_at AS "createdAt", updated_at AS "updatedAt",
     completed_at AS "completedAt"`;
   return row || null;
 }
@@ -1208,6 +1587,7 @@ export async function recordWorkerHeartbeat({ workerId, status = "idle", version
 
 export async function getLocalWorkerStatus() {
   await ensureJobSearchRepository();
+  const queueControl = await getLocalQueueControl();
   if (!hasDatabase()) {
     const db = await readLocal();
     const grouped = new Map();
@@ -1218,6 +1598,7 @@ export async function getLocalWorkerStatus() {
     return {
       tasks: [...grouped.values()],
       workers: db.workerHeartbeats,
+      queueControl,
     };
   }
   const sql = getSql();
@@ -1228,7 +1609,7 @@ export async function getLocalWorkerStatus() {
       metadata, started_at AS "startedAt", last_seen_at AS "lastSeenAt"
       FROM js_worker_heartbeats ORDER BY last_seen_at DESC`,
   ]);
-  return { tasks, workers };
+  return { tasks, workers, queueControl };
 }
 
 export async function canSpend(provider, estimatedCostUsd) {

@@ -1,4 +1,4 @@
-import { loginWithPassword, registerAccount } from "../../lib/workspace-client.js";
+﻿import { loginWithPassword, registerAccount } from "../../lib/workspace-client.js";
 
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
@@ -77,7 +77,7 @@ function renderBudget(usage = {}) {
   const quotas = usage.freeQuotas || {};
   const quotaCards = Object.entries(quotas).map(([provider, quota]) => {
     if (provider === "local") {
-      return `<article class="job-free-quota"><div><span>Local Qwen</span><strong>${quota.configured ? "unlimited" : "waiting for Mac"}</strong></div><small>$0 inference · ${escapeHtml(quota.model || "qwen3-14b")}</small></article>`;
+      return `<article class="job-free-quota"><div><span>Local Qwen</span><strong>${quota.configured ? "unlimited" : "waiting for Mac"}</strong></div><small>$0 inference Â· ${escapeHtml(quota.model || "qwen3-14b")}</small></article>`;
     }
     const isCloudflare = provider === "cloudflare";
     const used = isCloudflare ? Number(quota.neurons || 0) : Number(quota.requests || 0);
@@ -90,7 +90,7 @@ function renderBudget(usage = {}) {
   return `<section class="job-budget" aria-label="Monthly job-search budget">
     <div class="job-budget-head"><div><span>Monthly API spend</span><strong>$${spent.toFixed(2)} / $${budget.toFixed(2)}</strong></div><span>${escapeHtml(usage.month || "Current month")}</span></div>
     <div class="job-budget-track"><span style="width:${percent.toFixed(1)}%"></span></div>
-    <div class="job-budget-providers">${providers.length ? providers.map(([name, value]) => `<span>${escapeHtml(name)}: ${Number(value.requests || 0)} calls · $${Number(value.costUsd || 0).toFixed(2)}</span>`).join("") : "<span>No metered usage yet</span>"}</div>
+    <div class="job-budget-providers">${providers.length ? providers.map(([name, value]) => `<span>${escapeHtml(name)}: ${Number(value.requests || 0)} calls Â· $${Number(value.costUsd || 0).toFixed(2)}</span>`).join("") : "<span>No metered usage yet</span>"}</div>
     ${quotaCards ? `<div class="job-free-quota-grid">${quotaCards}</div>` : ""}
   </section>`;
 }
@@ -115,17 +115,18 @@ function renderSummary(summary = {}) {
   const target = Number(summary.calibrationTarget || 20);
   const calibration = summary.calibration || {};
   return `<div class="job-summary-grid">${entries.map(([label, value]) => `<article class="job-stat-card"><span>${label}</span><strong>${value}</strong></article>`).join("")}</div>
-    <section class="job-calibration"><div><span>Calibration labels</span><strong>${labelled} / ${target}</strong></div><div class="job-budget-track"><span style="width:${Math.min(100, target ? (labelled / target) * 100 : 0).toFixed(1)}%"></span></div><small>Auto-shortlisting ${calibration.active ? "enabled" : "locked"} · top-10 precision ${Math.round(Number(calibration.precisionTopTen || 0) * 100)}% · false rejection ${Math.round(Number(calibration.falseRejectionRate || 0) * 100)}%</small></section>`;
+    <section class="job-calibration"><div><span>Calibration labels</span><strong>${labelled} / ${target}</strong></div><div class="job-budget-track"><span style="width:${Math.min(100, target ? (labelled / target) * 100 : 0).toFixed(1)}%"></span></div><small>Auto-shortlisting ${calibration.active ? "enabled" : "locked"} Â· top-10 precision ${Math.round(Number(calibration.precisionTopTen || 0) * 100)}% Â· false rejection ${Math.round(Number(calibration.falseRejectionRate || 0) * 100)}%</small></section>`;
 }
 
 function renderLocalProcessing(local = {}) {
   const tasks = local.tasks || [];
   const workers = local.workers || [];
   const worker = workers[0] || null;
-  return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Local inference</p><h2>Mac worker</h2></div><span>${worker ? escapeHtml(statusLabel(worker.status)) : "Not connected yet"}</span></div>
+  const queueControl = local.queueControl || {};
+  return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Local inference</p><h2>Windows worker</h2></div><span>${worker ? escapeHtml(statusLabel(worker.status)) : "Not connected yet"}</span></div>
     <div class="job-runtime-grid">
-      ${tasks.length ? tasks.map((task) => `<article class="job-runtime-card"><span>${escapeHtml(statusLabel(task.taskType))} · ${escapeHtml(statusLabel(task.status))}</span><strong>${Number(task.count || 0)}</strong></article>`).join("") : `<article class="job-runtime-card"><span>Queue</span><strong>Empty</strong></article>`}
-      ${worker ? `<article class="job-runtime-card"><span>Last seen</span><strong>${escapeHtml(formatDate(worker.lastSeenAt))}</strong></article>` : ""}
+      ${tasks.length ? tasks.map((task) => `<article class="job-runtime-card"><span>${escapeHtml(statusLabel(task.taskType))} Â· ${escapeHtml(statusLabel(task.status))}</span><strong>${Number(task.count || 0)}</strong></article>`).join("") : `<article class="job-runtime-card"><span>Queue</span><strong>Empty</strong></article>`}
+      ${worker ? `<article class="job-runtime-card"><span>Last seen</span><strong>${escapeHtml(formatDate(worker.lastSeenAt))}</strong></article>` : ""}<article class="job-runtime-card"><span>Queue hold</span><strong>${queueControl.holdNewTasks ? "Enabled" : "Disabled"}</strong></article>
     </div>
   </section>`;
 }
@@ -140,7 +141,7 @@ const FEEDBACK_REASONS = [
 function renderClaims(claims = []) {
   if (!claims.length) return `<p class="job-muted">No grounded claims yet.</p>`;
   return `<div class="job-claims">${claims.slice(0, 12).map((claim) => `<div class="job-claim">
-    <div><strong>${escapeHtml(statusLabel(claim.claimType))}</strong><span>${escapeHtml(claim.evidenceType)} · ${Math.round(Number(claim.confidence || 0) * 100)}%</span></div>
+    <div><strong>${escapeHtml(statusLabel(claim.claimType))}</strong><span>${escapeHtml(claim.evidenceType)} Â· ${Math.round(Number(claim.confidence || 0) * 100)}%</span></div>
     <p>${escapeHtml(claim.value)}</p>
     ${claim.supportingPassage ? `<blockquote>${escapeHtml(claim.supportingPassage)}</blockquote>` : ""}
     ${claim.sourceUrl ? `<a class="inline-link" href="${escapeHtml(claim.sourceUrl)}" target="_blank" rel="noreferrer">Source</a>` : ""}
@@ -199,7 +200,7 @@ function renderJob(job) {
   return `<article class="job-result" data-job-id="${escapeHtml(job.id)}">
     <div class="job-result-head">
       <div><p class="eyebrow">${escapeHtml(job.roleFamily || "Exploratory")}</p><h3>${escapeHtml(job.title)}</h3>
-        <p>${escapeHtml(job.company || "Company not identified")} · ${escapeHtml(job.location || "Location not listed")}</p></div>
+        <p>${escapeHtml(job.company || "Company not identified")} Â· ${escapeHtml(job.location || "Location not listed")}</p></div>
       <div class="job-result-score"><span>${score === null ? "Pending" : score}</span><small>${escapeHtml(statusLabel(job.status))}</small></div>
     </div>
     ${renderCardFacts(job)}
@@ -209,7 +210,7 @@ function renderJob(job) {
       ${(job.redFlags || []).slice(0, 3).map((flag) => `<span class="job-pill job-pill--bad">${escapeHtml(flag)}</span>`).join("")}
       ${(job.unknowns || []).slice(0, 3).map((flag) => `<span class="job-pill">Unknown: ${escapeHtml(flag)}</span>`).join("")}
     </div>
-    <div class="job-result-meta"><span>${escapeHtml(job.sourceProvider)}</span><span>${escapeHtml(job.lane)}</span><span>${activeModel ? `AI: ${escapeHtml(activeModel.provider)} · ${escapeHtml(activeModel.model)}` : "AI: pending"}</span><span>Agreement: ${escapeHtml(job.modelAgreement)}</span><span>${formatDate(job.postedAt || job.firstSeenAt)}</span></div>
+    <div class="job-result-meta"><span>${escapeHtml(job.sourceProvider)}</span><span>${escapeHtml(job.lane)}</span><span>${activeModel ? `AI: ${escapeHtml(activeModel.provider)} Â· ${escapeHtml(activeModel.model)}` : "AI: pending"}</span><span>Agreement: ${escapeHtml(job.modelAgreement)}</span><span>${formatDate(job.postedAt || job.firstSeenAt)}</span></div>
     <div class="job-result-actions">
       ${safeExternalUrl(job.url) ? `<a class="button button-secondary" href="${escapeHtml(safeExternalUrl(job.url))}" target="_blank" rel="noreferrer">Open role</a>` : ""}
       <button type="button" class="verify-inline-button" data-rerun-job="${escapeHtml(job.id)}">Rerun</button>
@@ -238,8 +239,8 @@ function renderDiscoveryLeads(leads = []) {
     <div class="job-run-list">${leads.map((lead) => {
       const url = safeExternalUrl(lead.url);
       return `<article class="job-run-card"><div><span>${escapeHtml(lead.sourceProvider)}</span><strong>${escapeHtml(statusLabel(lead.status))}</strong></div>
-        <h3>${escapeHtml(lead.title)}</h3><p>${escapeHtml(lead.company)}${lead.location ? ` · ${escapeHtml(lead.location)}` : ""}</p>
-        <p>${escapeHtml(statusLabel(lead.lane))} · ${escapeHtml(statusLabel(lead.familyId))} · ${formatDate(lead.lastSeenAt)}</p>
+        <h3>${escapeHtml(lead.title)}</h3><p>${escapeHtml(lead.company)}${lead.location ? ` Â· ${escapeHtml(lead.location)}` : ""}</p>
+        <p>${escapeHtml(statusLabel(lead.lane))} Â· ${escapeHtml(statusLabel(lead.familyId))} Â· ${formatDate(lead.lastSeenAt)}</p>
         <small>${escapeHtml(lead.reason)}</small>${url ? `<a class="inline-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">Open source</a>` : ""}</article>`;
     }).join("")}</div></section>`;
 }
@@ -248,14 +249,17 @@ function renderTaxonomy(taxonomy = {}) {
   const proposed = taxonomy.proposed || [];
   const active = taxonomy.active || [];
   return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Title intelligence</p><h2>Pattern proposals</h2></div><span>${proposed.length} awaiting review</span></div>
-    <div class="job-taxonomy-list">${proposed.length ? proposed.map((pattern) => `<article><div><strong>${escapeHtml(pattern.expression)}</strong><span>${escapeHtml(pattern.familyLabel)} · ${escapeHtml(pattern.matchType)} · support ${pattern.supportCount}</span></div><p>${escapeHtml(pattern.metrics?.rationale || "Observed title alias")}</p><div><button class="verify-inline-button" data-taxonomy-action="approve" data-pattern-id="${escapeHtml(pattern.id)}">Approve</button><button class="verify-inline-button" data-taxonomy-action="reject" data-pattern-id="${escapeHtml(pattern.id)}">Reject</button></div></article>`).join("") : `<p class="verify-note">No pending proposals.</p>`}</div>
+    <div class="job-taxonomy-list">${proposed.length ? proposed.map((pattern) => `<article><div><strong>${escapeHtml(pattern.expression)}</strong><span>${escapeHtml(pattern.familyLabel)} Â· ${escapeHtml(pattern.matchType)} Â· support ${pattern.supportCount}</span></div><p>${escapeHtml(pattern.metrics?.rationale || "Observed title alias")}</p><div><button class="verify-inline-button" data-taxonomy-action="approve" data-pattern-id="${escapeHtml(pattern.id)}">Approve</button><button class="verify-inline-button" data-taxonomy-action="reject" data-pattern-id="${escapeHtml(pattern.id)}">Reject</button></div></article>`).join("") : `<p class="verify-note">No pending proposals.</p>`}</div>
     <details class="job-active-patterns"><summary>${active.length} active patterns</summary><div>${active.map((pattern) => `<span>${escapeHtml(pattern.familyLabel)}: ${escapeHtml(pattern.expression)}${pattern.version > 1 ? `<button class="verify-inline-button" data-taxonomy-action="rollback" data-pattern-id="${escapeHtml(pattern.id)}">Rollback</button>` : ""}</span>`).join("")}</div></details>
   </section>`;
 }
 
 function renderRuns(runs = []) {
+  const collectorSummary = (run) => Object.entries(run.providers?.collector?.sources || {})
+    .map(([sourceId, state]) => `${sourceId}: ${state.status} (${Number(state.jobCount || 0)} jobs)`)
+    .join(" · ");
   return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Operations</p><h2>Workflow runs</h2></div></div>
-    <div class="job-run-list">${runs.length ? runs.map((run) => `<article class="job-run-card"><div><span>${escapeHtml(run.trigger)}</span><strong>${escapeHtml(statusLabel(run.status))}</strong></div><p>${escapeHtml(statusLabel(run.phase))} · ${formatDate(run.startedAt)}</p><p>${Number(run.stats?.discovered || 0)} discovered · ${Number(run.stats?.triaged || 0)} triaged · ${Number(run.stats?.deepEvaluated || 0)} deep · ${Number(run.stats?.shortlisted || 0)} shortlisted</p>${(run.errors || []).map((error) => `<small>${escapeHtml(error.message)}</small>`).join("")}</article>`).join("") : `<p class="verify-note">No runs yet.</p>`}</div>
+    <div class="job-run-list">${runs.length ? runs.map((run) => `<article class="job-run-card"><div><span>${escapeHtml(run.trigger)}</span><strong>${escapeHtml(statusLabel(run.status))}</strong></div><p>${escapeHtml(statusLabel(run.phase))} · ${formatDate(run.startedAt)}</p><p>${Number(run.stats?.discovered || 0)} discovered · ${Number(run.stats?.triaged || 0)} triaged · ${Number(run.stats?.deepEvaluated || 0)} deep · ${Number(run.stats?.shortlisted || 0)} shortlisted</p>${collectorSummary(run) ? `<small>${escapeHtml(collectorSummary(run))}</small>` : ""}${(run.errors || []).map((error) => `<small>${escapeHtml(error.message)}</small>`).join("")}</article>`).join("") : `<p class="verify-note">No runs yet.</p>`}</div>
   </section>`;
 }
 
@@ -328,7 +332,7 @@ export function mountJobSearch(root) {
     for (let attempt = 0; attempt < 90; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       const { run } = await request(`/api/job-search/runs/${encodeURIComponent(runId)}`);
-      state.notice = `Run ${statusLabel(run.status)} · ${statusLabel(run.phase)}`;
+      state.notice = `Run ${statusLabel(run.status)} Â· ${statusLabel(run.phase)}`;
       if (["completed", "partial", "failed", "blocked"].includes(run.status)) { await loadDashboard(); await render(); return; }
       if (attempt % 3 === 0) await render();
     }

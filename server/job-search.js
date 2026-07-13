@@ -4,6 +4,11 @@ import { enqueueJobSearchRun } from "./job-search/inngest.js";
 import { ownerEmails, TARGET_PROFILE } from "./job-search/profile.js";
 import { getFreeProviderQuotaSummary, providerConfiguration, runFreeProviderCanary } from "./job-search/providers.js";
 import {
+  enqueueNextWindowsTask,
+  reconcileHeldWindowsQueue,
+  releaseHeldWindowsBacklog,
+} from "./job-search/workflow.js";
+import {
   createRun,
   ensureJobSearchRepository,
   getJob,
@@ -66,8 +71,8 @@ export function getJobSearchPlan() {
       monthlyUsd: Number(process.env.JOBSEARCH_MONTHLY_BUDGET_USD || 5),
       zaiUsd: 4,
       moonshotUsd: 1,
-      deepEvaluationsPerDay: Number(process.env.JOBSEARCH_DEEP_EVALUATIONS_PER_DAY || 8),
-      criticEvaluationsPerDay: Number(process.env.JOBSEARCH_CRITIC_EVALUATIONS_PER_DAY || 5),
+      deepEvaluationsPerDay: null,
+      criticEvaluationsPerDay: null,
       serpQueriesPerDay: Number(process.env.JOBSEARCH_SERP_QUERIES_PER_DAY || 8),
       braveQueriesPerMonth: Number(process.env.JOBSEARCH_BRAVE_QUERIES_PER_MONTH || 950),
       openrouterRequestsPerDay: Number(process.env.JOBSEARCH_OPENROUTER_REQUESTS_PER_DAY || 45),
@@ -229,6 +234,9 @@ export async function updateJobSearchFeedback(jobId, input) {
     error.statusCode = 404;
     throw error;
   }
+  if (process.env.JOBSEARCH_LOCAL_WORKER_ENABLED === "true") {
+    await enqueueNextWindowsTask(updated).catch(() => null);
+  }
   return publicJob(updated);
 }
 
@@ -270,6 +278,34 @@ export async function rerunJobSearchJob(jobId) {
     throw error;
   }
   return runJobSearchIngest({ trigger: "rerun", discoveryUrls: [job.canonicalUrl], slot: "morning" });
+}
+
+export async function holdJobSearchLocalQueue(input = {}) {
+  await ensureJobSearchRepository();
+  if (!String(input.operationKey || "").trim()) {
+    const error = new Error("operationKey is required for idempotent queue hold operations.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return reconcileHeldWindowsQueue({
+    operationKey: String(input.operationKey || "").trim(),
+    dryRun: input.dryRun === true,
+    reason: String(input.reason || "windows_migration_precalibration").trim() || "windows_migration_precalibration",
+  });
+}
+
+export async function releaseJobSearchLocalBacklog(input = {}) {
+  await ensureJobSearchRepository();
+  if (!String(input.operationKey || "").trim()) {
+    const error = new Error("operationKey is required for idempotent queue release operations.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return releaseHeldWindowsBacklog({
+    operationKey: String(input.operationKey || "").trim(),
+    dryRun: input.dryRun === true,
+    limit: input.limit,
+  });
 }
 
 export function cosineSimilarity(left, right) {

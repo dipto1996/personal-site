@@ -15,22 +15,29 @@ import {
 } from "./providers.js";
 import {
   addSnapshot,
-  countEvaluationsSince,
   enqueueLocalTask,
+  getControlOperation,
   getJob,
   getCalibrationStatus,
+  getLocalQueueControl,
+  getRun,
   getUsageSummary,
+  holdLocalQueueTasks,
   listCompanies,
   listFeedbackExamples,
   listJobs,
+  listLocalTasks,
   listTitleObservations,
   listTitlePatterns,
   recordDiscoveryLeads,
   readResearchCache,
   recordEvaluation,
   recordObservation,
+  releaseLocalQueueTasks,
   replaceClaims,
   saveTitlePattern,
+  saveControlOperation,
+  setLocalQueueControl,
   updateRun,
   upsertCompany,
   upsertJob,
@@ -50,7 +57,9 @@ import {
   normalizeTitle,
 } from "./taxonomy.js";
 import { classifyCandidateTitle } from "./title-ontology.js";
+import { normalizeTimestampInput } from "./utils.js";
 import { rotatingWatchlistCompanies } from "./watchlist.js";
+import { parseWorkerOutput } from "./worker-contract.js";
 
 const PROMPT_VERSION = "job-intelligence-2026-07-v1";
 
@@ -75,14 +84,48 @@ function uniqueJobs(jobs) {
   return [...byKey.values()];
 }
 
-function parsePostedAt(value) {
-  if (!value) return null;
-  const direct = new Date(value);
-  if (!Number.isNaN(direct.getTime())) return direct.toISOString();
-  const relative = String(value).match(/(\d+)\s+(minute|hour|day|week)s?\s+ago/i);
-  if (!relative) return null;
-  const unitMs = { minute: 60000, hour: 3600000, day: 86400000, week: 604800000 };
-  return new Date(Date.now() - Number(relative[1]) * unitMs[relative[2].toLowerCase()]).toISOString();
+function normalizePostedTimestamp(value) {
+  const normalized = normalizeTimestampInput(value);
+  return {
+    postedAt: normalized.iso,
+    postedAtRaw: normalized.raw && !normalized.iso ? normalized.raw : "",
+  };
+}
+
+function clearMismatchPromoted(job) {
+  return job?.details?.triage?.relevance === "irrelevant" && ["apply", "maybe"].includes(job?.disposition);
+}
+
+function shouldQueueDeepForJob(job) {
+  if (!job || job.details?.deepStatus === "complete" || job.details?.deepEvaluation) return false;
+  const relevance = job.details?.triage?.relevance;
+  return relevance === "relevant" || relevance === "uncertain" || clearMismatchPromoted(job);
+}
+
+function shouldQueueCriticForJob(job) {
+  return Boolean(job?.details?.deepEvaluation) && job?.details?.criticStatus !== "complete";
+}
+
+function nextLocalTaskType(job) {
+  if (!job) return null;
+  if (job.details?.triageStatus !== "complete") return "triage";
+  if (shouldQueueDeepForJob(job)) return "deep";
+  if (shouldQueueCriticForJob(job)) return "critic";
+  if (
+    job.details?.deepEvaluation?.verdict === "apply"
+    && job.details?.critic?.agrees
+    && job.details?.critic?.recommendedVerdict === "apply"
+    && !job.details?.outreach
+  ) return "outreach";
+  return null;
+}
+
+function localTaskPriority(job, taskType) {
+  if (taskType === "triage") return 100;
+  if (taskType === "deep") return job?.details?.triage?.relevance === "relevant" ? 80 : 70;
+  if (taskType === "critic") return 60;
+  if (taskType === "outreach") return 30;
+  return 0;
 }
 
 async function braveWithinQuota(query, options = {}) {
@@ -198,6 +241,7 @@ async function normalizeAndPersist(jobs) {
   const patterns = await listTitlePatterns({ includeInactive: false });
   const persisted = [];
   for (const job of jobs) {
+    const postedTimestamp = normalizePostedTimestamp(job.postedAt || job.postedAtRaw || "");
     const title = classifyTitle(job.title, patterns);
     const ontology = classifyCandidateTitle(job.title);
     const routedFamilyId = title.familyId === "exploratory" && ontology.eligible
@@ -214,9 +258,14 @@ async function normalizeAndPersist(jobs) {
       contentHash,
       roleFamilyId: routedFamilyId,
       status: unchanged ? existing.status : "triage_pending",
-      postedAt: parsePostedAt(job.postedAt),
+      postedAt: postedTimestamp.postedAt,
+      postedAtRaw: postedTimestamp.postedAtRaw,
       details: {
         ...(existing?.details || {}),
+        sourceMetadata: {
+          ...(existing?.details?.sourceMetadata || {}),
+          ...(postedTimestamp.postedAtRaw ? { postedAtRaw: postedTimestamp.postedAtRaw } : {}),
+        },
         titleClassification: {
           ...title,
           familyId: routedFamilyId,
@@ -229,7 +278,7 @@ async function normalizeAndPersist(jobs) {
           value: "Source job description",
           sourceUrl: job.url || "",
           supportingPassage: job.description.slice(0, 600),
-          sourceDate: parsePostedAt(job.postedAt) || "",
+          sourceDate: postedTimestamp.postedAt || postedTimestamp.postedAtRaw || "",
           confidence: 1,
           evidenceType: "explicit",
         }],
@@ -379,15 +428,9 @@ function compareDeepCandidates(left, right) {
 }
 
 async function deepEvaluateJobs(jobs, runId) {
-  const startOfDay = new Date();
-  startOfDay.setUTCHours(0, 0, 0, 0);
-  const maxDaily = Number(process.env.JOBSEARCH_DEEP_EVALUATIONS_PER_DAY || 8);
-  const usedToday = await countEvaluationsSince("deep", startOfDay.toISOString());
-  const available = Math.max(0, maxDaily - usedToday);
   const candidates = jobs
-    .filter((job) => job.status === "deep_review_pending")
-    .sort(compareDeepCandidates)
-    .slice(0, available);
+    .filter((job) => shouldQueueDeepForJob(job))
+    .sort(compareDeepCandidates);
   const evaluated = [];
   for (const job of candidates) {
     const research = await researchJob(job, runId);
@@ -433,16 +476,11 @@ async function selectDeepCandidates(jobIds, includeBacklog = true) {
     jobsForIds(jobIds),
     includeBacklog ? listJobs({ view: "all", limit: 1000 }) : Promise.resolve([]),
   ]);
-  const jobs = [...new Map([...current, ...backlog.filter((job) => job.status === "deep_review_pending")]
+  const jobs = [...new Map([...current, ...backlog.filter((job) => shouldQueueDeepForJob(job))]
     .map((job) => [job.id, job])).values()];
-  const startOfDay = new Date();
-  startOfDay.setUTCHours(0, 0, 0, 0);
-  const maxDaily = Number(process.env.JOBSEARCH_DEEP_EVALUATIONS_PER_DAY || 8);
-  const available = Math.max(0, maxDaily - await countEvaluationsSince("deep", startOfDay.toISOString()));
   return jobs
-    .filter((job) => job.status === "deep_review_pending")
-    .sort(compareDeepCandidates)
-    .slice(0, available);
+    .filter((job) => shouldQueueDeepForJob(job))
+    .sort(compareDeepCandidates);
 }
 
 function criticMessages(job) {
@@ -457,13 +495,9 @@ function criticMessages(job) {
 }
 
 async function criticJobs(jobs, runId) {
-  const startOfDay = new Date();
-  startOfDay.setUTCHours(0, 0, 0, 0);
-  const maxDaily = Number(process.env.JOBSEARCH_CRITIC_EVALUATIONS_PER_DAY || 5);
-  const available = Math.max(0, maxDaily - await countEvaluationsSince("critic", startOfDay.toISOString()));
-  const candidates = jobs.filter((job) => job.status === "critic_pending")
+  const candidates = jobs.filter((job) => shouldQueueCriticForJob(job))
     .sort((a, b) => (b.details?.deepEvaluation?.overallScore || 0) - (a.details?.deepEvaluation?.overallScore || 0))
-    .slice(0, available);
+    ;
   const reviewed = [];
   const calibration = await getCalibrationStatus();
   for (const job of candidates) {
@@ -510,15 +544,10 @@ async function selectCriticCandidates(jobIds, includeBacklog = true) {
     jobsForIds(jobIds),
     includeBacklog ? listJobs({ view: "all", limit: 1000 }) : Promise.resolve([]),
   ]);
-  const jobs = [...new Map([...current, ...backlog.filter((job) => job.status === "critic_pending")]
+  const jobs = [...new Map([...current, ...backlog.filter((job) => shouldQueueCriticForJob(job))]
     .map((job) => [job.id, job])).values()];
-  const startOfDay = new Date();
-  startOfDay.setUTCHours(0, 0, 0, 0);
-  const maxDaily = Number(process.env.JOBSEARCH_CRITIC_EVALUATIONS_PER_DAY || 5);
-  const available = Math.max(0, maxDaily - await countEvaluationsSince("critic", startOfDay.toISOString()));
-  return jobs.filter((job) => job.status === "critic_pending")
-    .sort((a, b) => (b.details?.deepEvaluation?.overallScore || 0) - (a.details?.deepEvaluation?.overallScore || 0))
-    .slice(0, available);
+  return jobs.filter((job) => shouldQueueCriticForJob(job))
+    .sort((a, b) => (b.details?.deepEvaluation?.overallScore || 0) - (a.details?.deepEvaluation?.overallScore || 0));
 }
 
 async function draftOutreach(job, runId) {
@@ -598,22 +627,26 @@ export async function enqueueJobsForLocalProcessing({ runId = null, jobIds = [] 
   const jobs = await jobsForIds(jobIds);
   const queued = [];
   for (const job of jobs) {
+    const taskType = nextLocalTaskType(job);
+    if (!taskType) continue;
     const revision = `${job.contentHash}:${PROMPT_VERSION}`;
-    const taskType = job.details?.triageStatus === "complete" ? "deep" : "triage";
     const task = await enqueueLocalTask({
       jobId: job.id,
       taskType,
-      priority: taskType === "triage" ? 100 : 80,
+      priority: taskType === "triage" ? 100 : taskType === "deep" ? 80 : taskType === "critic" ? 60 : 30,
       revision: `${revision}:${taskType}`,
       payload: { sourceId: job.sourceId, runId },
     });
     queued.push(task);
     await upsertJob({
       ...job,
-      status: taskType === "triage" ? "local_triage_pending" : "deep_review_pending",
+      status: taskType === "triage" ? "local_triage_pending"
+        : taskType === "deep" ? "deep_review_pending"
+          : taskType === "critic" ? "critic_pending"
+            : job.status,
       details: {
         ...job.details,
-        localQueue: { status: "queued", taskId: task.id, taskType, queuedAt: new Date().toISOString() },
+        localQueue: { status: task.status, taskId: task.id, taskType, queuedAt: new Date().toISOString() },
       },
     });
   }
@@ -629,7 +662,7 @@ export async function runDeepStage({ runId, jobIds, includeBacklog = true }) {
     jobsForIds(jobIds),
     includeBacklog ? listJobs({ view: "all", limit: 1000 }) : Promise.resolve([]),
   ]);
-  const jobs = [...new Map([...current, ...backlog.filter((job) => job.status === "deep_review_pending")]
+  const jobs = [...new Map([...current, ...backlog.filter((job) => shouldQueueDeepForJob(job))]
     .map((job) => [job.id, job])).values()];
   const evaluated = await deepEvaluateJobs(jobs, runId);
   return {
@@ -648,7 +681,7 @@ export async function runCriticStage({ runId, jobIds, includeBacklog = true }) {
     jobsForIds(jobIds),
     includeBacklog ? listJobs({ view: "all", limit: 1000 }) : Promise.resolve([]),
   ]);
-  const jobs = [...new Map([...current, ...backlog.filter((job) => job.status === "critic_pending")]
+  const jobs = [...new Map([...current, ...backlog.filter((job) => shouldQueueCriticForJob(job))]
     .map((job) => [job.id, job])).values()];
   const reviewed = await criticJobs(jobs, runId);
   return {
@@ -783,6 +816,421 @@ export async function runLocalOutreachDraft({ jobId, runId = null }) {
   });
   if (!response.result) throw new Error(`Local outreach drafting failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
   return upsertJob({ ...job, details: { ...job.details, outreach: response.result } });
+}
+
+function deterministicWorkerEvaluationId(taskKey, stage) {
+  return `jseval_worker_${hash(taskKey, stage).slice(0, 32)}`;
+}
+
+function dedupeClaims(claims = []) {
+  const unique = new Map();
+  for (const claim of claims) {
+    const key = `${claim.claimType || ""}|${claim.value || ""}|${claim.sourceUrl || ""}|${claim.supportingPassage || ""}`;
+    if (!unique.has(key)) unique.set(key, claim);
+  }
+  return [...unique.values()].slice(0, 30);
+}
+
+export async function applyWindowsWorkerResult({ task, output, resultId, model = "qwen3-4b-q4_k_m", usage = {} }) {
+  const job = await getJob(task.jobId);
+  if (!job) throw new Error(`Job ${task.jobId} was not found.`);
+  const previous = job.details?.workerTaskResults?.[task.taskKey];
+  if (previous?.resultId === resultId) return job;
+
+  const parsed = parseWorkerOutput(task.taskType, output);
+  const evaluationBase = {
+    jobId: job.id,
+    runId: task.payload?.runId || null,
+    provider: "windows-local",
+    model,
+    promptVersion: PROMPT_VERSION,
+    usage,
+  };
+  let updated;
+
+  if (task.taskType === "triage") {
+    const evaluation = parsed.triage;
+    const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.9;
+    await recordEvaluation({
+      ...evaluationBase,
+      id: deterministicWorkerEvaluationId(task.taskKey, "triage"),
+      stage: "triage",
+      verdict: evaluation.relevance,
+      score: evaluation.confidence * 100,
+      output: evaluation,
+    });
+    updated = await upsertJob({
+      ...job,
+      roleFamilyId: evaluation.roleFamilyId || job.roleFamilyId,
+      status: reject ? "triage_rejected" : "deep_review_pending",
+      details: {
+        ...job.details,
+        triage: evaluation,
+        triageStatus: "complete",
+        triageProvider: evaluationBase.provider,
+        triageModel: model,
+        triageAttempts: [{ provider: evaluationBase.provider, model, status: "live" }],
+      },
+    });
+  } else if (task.taskType === "deep") {
+    const result = parsed.evaluation;
+    const evaluation = await recordEvaluation({
+      ...evaluationBase,
+      id: deterministicWorkerEvaluationId(task.taskKey, "deep"),
+      stage: "deep",
+      verdict: result.verdict,
+      score: result.overallScore,
+      output: { ...result, evidenceExtraction: parsed.extraction },
+    });
+    const claims = dedupeClaims([
+      ...(job.details?.sourceEvidence || []),
+      ...parsed.extraction.claims,
+      ...result.claims,
+    ]);
+    await replaceClaims(job.id, evaluation.id, claims);
+    updated = await upsertJob({
+      ...job,
+      status: result.verdict === "apply" ? "critic_pending"
+        : result.verdict === "maybe" ? "needs_review" : "passed",
+      details: {
+        ...job.details,
+        evidenceExtraction: parsed.extraction,
+        deepEvaluation: result,
+        deepStatus: "complete",
+        deepProvider: evaluationBase.provider,
+        deepModel: model,
+        deepAttempts: [{ provider: evaluationBase.provider, model, status: "live" }],
+        claims,
+      },
+    });
+  } else if (task.taskType === "critic") {
+    if (!job.details?.deepEvaluation) throw new Error(`Job ${job.id} has no deep evaluation to criticise.`);
+    const result = parsed.critic;
+    if (result.agrees !== (result.recommendedVerdict === job.details.deepEvaluation.verdict)) {
+      throw new Error("Critic agreement is inconsistent with its recommended verdict.");
+    }
+    await recordEvaluation({
+      ...evaluationBase,
+      id: deterministicWorkerEvaluationId(task.taskKey, "critic"),
+      stage: "critic",
+      verdict: result.recommendedVerdict,
+      score: result.confidence * 100,
+      output: result,
+    });
+    const disagreement = !result.agrees || result.recommendedVerdict !== job.details.deepEvaluation.verdict;
+    const calibration = await getCalibrationStatus();
+    const strongCandidate = !disagreement && result.recommendedVerdict === "apply";
+    updated = await upsertJob({
+      ...job,
+      status: disagreement ? "needs_review"
+        : strongCandidate && calibration.active ? "shortlisted"
+          : result.recommendedVerdict === "pass" ? "passed" : "needs_review",
+      details: {
+        ...job.details,
+        critic: result,
+        criticStatus: "complete",
+        criticProvider: evaluationBase.provider,
+        criticModel: model,
+        criticAttempts: [{ provider: evaluationBase.provider, model, status: "live" }],
+        modelAgreement: disagreement ? "disagree" : "agree",
+        autoShortlist: strongCandidate ? { enabled: calibration.active, calibration } : null,
+      },
+    });
+  } else if (task.taskType === "outreach") {
+    updated = await upsertJob({
+      ...job,
+      details: { ...job.details, outreach: parsed.outreach },
+    });
+  }
+
+  return upsertJob({
+    ...updated,
+    details: {
+      ...updated.details,
+      workerTaskResults: {
+        ...(updated.details?.workerTaskResults || {}),
+        [task.taskKey]: { resultId, taskType: task.taskType, completedAt: new Date().toISOString() },
+      },
+    },
+  });
+}
+
+export async function enqueueNextWindowsTask(job) {
+  if (!job) return null;
+  const revision = `${job.contentHash}:${PROMPT_VERSION}`;
+  const taskType = nextLocalTaskType(job);
+  if (!taskType) return null;
+  return enqueueLocalTask({
+    jobId: job.id,
+    taskType,
+    priority: localTaskPriority(job, taskType),
+    revision: taskType === "critic" && job.details?.deepEvaluation
+      ? `${revision}:windows-critic-v1:${job.details.deepEvaluation.overallScore}`
+      : taskType === "outreach" && job.details?.deepEvaluation
+        ? `${revision}:windows-outreach-v1:${job.details.deepEvaluation.overallScore}`
+        : taskType === "deep"
+          ? `${revision}:windows-deep-grounded-v1`
+          : `${revision}:windows-${taskType}-v1`,
+    payload: { sourceId: job.sourceId },
+  });
+}
+
+function boundedReleaseLimit(limit, fallback = 20, maximum = 200) {
+  const parsed = Number(limit);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(maximum, Math.floor(parsed)));
+}
+
+function queueCounts(tasks = []) {
+  const byStatus = {};
+  const byTaskType = {};
+  tasks.forEach((task) => {
+    byStatus[task.status] = (byStatus[task.status] || 0) + 1;
+    byTaskType[task.taskType] ||= {};
+    byTaskType[task.taskType][task.status] = (byTaskType[task.taskType][task.status] || 0) + 1;
+  });
+  return { total: tasks.length, byStatus, byTaskType };
+}
+
+function simulateHeldQueue(tasks = [], heldIds = new Set()) {
+  return tasks.map((task) => (heldIds.has(task.id) && ["queued", "retry", "processing"].includes(task.status))
+    ? { ...task, status: "held", leaseUntil: null, leasedBy: "", leaseToken: "" }
+    : task);
+}
+
+function simulateReleasedQueue(tasks = [], releasedIds = new Set()) {
+  return tasks.map((task) => (releasedIds.has(task.id) && task.status === "held")
+    ? { ...task, status: "queued", leaseUntil: null, leasedBy: "", leaseToken: "" }
+    : task);
+}
+
+function buildTaskLookup(tasks = []) {
+  const lookup = new Map();
+  for (const task of tasks) {
+    const key = `${task.jobId}:${task.taskType}`;
+    if (!lookup.has(key)) lookup.set(key, []);
+    lookup.get(key).push(task);
+  }
+  for (const values of lookup.values()) {
+    values.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+  return lookup;
+}
+
+function pendingTaskFor(lookup, jobId, taskType) {
+  return (lookup.get(`${jobId}:${taskType}`) || []).find((task) => ["held", "queued", "retry"].includes(task.status)) || null;
+}
+
+function interleaveBuckets(...buckets) {
+  const queues = buckets.map((bucket) => [...bucket]);
+  const result = [];
+  let advanced = true;
+  while (advanced) {
+    advanced = false;
+    for (const queue of queues) {
+      if (!queue.length) continue;
+      result.push(queue.shift());
+      advanced = true;
+    }
+  }
+  return result;
+}
+
+function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds = [] } = {}) {
+  const lookup = buildTaskLookup(tasks);
+  const active = new Set(activeReleaseJobIds);
+  const deepRelevant = [];
+  const deepPromoted = [];
+  const deepUncertain = [];
+  const criticReady = [];
+
+  for (const job of jobs) {
+    if (!job || active.has(job.id)) continue;
+    if (shouldQueueDeepForJob(job)) {
+      const candidate = {
+        job,
+        taskType: "deep",
+        task: pendingTaskFor(lookup, job.id, "deep"),
+      };
+      if (job.details?.triage?.relevance === "relevant") deepRelevant.push(candidate);
+      else if (clearMismatchPromoted(job)) deepPromoted.push(candidate);
+      else deepUncertain.push(candidate);
+      continue;
+    }
+    if (shouldQueueCriticForJob(job)) {
+      criticReady.push({
+        job,
+        taskType: "critic",
+        task: pendingTaskFor(lookup, job.id, "critic"),
+      });
+    }
+  }
+
+  deepRelevant.sort((left, right) => compareDeepCandidates(left.job, right.job));
+  deepPromoted.sort((left, right) => compareDeepCandidates(left.job, right.job));
+  deepUncertain.sort((left, right) => compareDeepCandidates(left.job, right.job));
+  criticReady.sort((left, right) => (
+    (right.job.details?.deepEvaluation?.overallScore || 0) - (left.job.details?.deepEvaluation?.overallScore || 0)
+  ));
+
+  const ordered = [...deepRelevant, ...deepPromoted, ...deepUncertain, ...criticReady];
+  const selected = ordered.slice(0, limit);
+  return {
+    counts: {
+      totalCandidates: ordered.length,
+      deepRelevant: deepRelevant.length,
+      deepPromoted: deepPromoted.length,
+      deepUncertain: deepUncertain.length,
+      criticReady: criticReady.length,
+    },
+    selected,
+  };
+}
+
+export async function reconcileHeldWindowsQueue({
+  operationKey = "",
+  dryRun = false,
+  reason = "windows_migration_precalibration",
+} = {}) {
+  if (operationKey) {
+    const existing = await getControlOperation("queue_hold", operationKey);
+    if (existing?.result) return existing.result;
+  }
+
+  const [queueControlBefore, tasksBefore] = await Promise.all([
+    getLocalQueueControl(),
+    listLocalTasks({ limit: 10000 }),
+  ]);
+  const holdableIds = new Set(tasksBefore
+    .filter((task) => ["queued", "retry"].includes(task.status)
+      || (task.status === "processing" && task.leaseUntil && new Date(task.leaseUntil) <= Date.now()))
+    .map((task) => task.id));
+  const simulatedAfter = simulateHeldQueue(tasksBefore, holdableIds);
+
+  let queueControlAfter = queueControlBefore;
+  let heldTasks = [];
+  if (!dryRun) {
+    queueControlAfter = await setLocalQueueControl({
+      holdNewTasks: true,
+      holdReason: reason,
+      activeReleaseJobIds: [],
+    });
+    heldTasks = await holdLocalQueueTasks({
+      statuses: ["queued", "retry"],
+      includeExpiredProcessing: true,
+      reason,
+    });
+  }
+
+  const result = {
+    ok: true,
+    dryRun,
+    operationKey: operationKey || null,
+    holdReason: reason,
+    queueControlBefore,
+    queueControlAfter: dryRun ? {
+      ...queueControlBefore,
+      holdNewTasks: true,
+      holdReason: reason,
+      activeReleaseJobIds: [],
+    } : queueControlAfter,
+    queueCounts: {
+      before: queueCounts(tasksBefore),
+      after: queueCounts(dryRun ? simulatedAfter : await listLocalTasks({ limit: 10000 })),
+    },
+    heldCount: holdableIds.size,
+    heldTaskIds: dryRun ? [...holdableIds] : heldTasks.map((task) => task.id),
+  };
+  if (operationKey) {
+    await saveControlOperation("queue_hold", operationKey, { result });
+  }
+  return result;
+}
+
+export async function releaseHeldWindowsBacklog({
+  operationKey = "",
+  dryRun = false,
+  limit = 20,
+} = {}) {
+  if (operationKey) {
+    const existing = await getControlOperation("queue_release", operationKey);
+    if (existing?.result) return existing.result;
+  }
+
+  const boundedLimit = boundedReleaseLimit(limit, 20, 200);
+  const [queueControlBefore, tasksBefore, jobs] = await Promise.all([
+    getLocalQueueControl(),
+    listLocalTasks({ limit: 10000 }),
+    listJobs({ view: "all", limit: 5000 }),
+  ]);
+  const plan = buildBackfillReleasePlan(jobs, tasksBefore, {
+    limit: boundedLimit,
+    activeReleaseJobIds: queueControlBefore.activeReleaseJobIds,
+  });
+
+  if (!dryRun && !queueControlBefore.holdNewTasks) {
+    const error = new Error("Queue hold must be enabled before releasing a controlled backlog cohort.");
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const selectedJobIds = plan.selected.map((item) => item.job.id);
+  const selectedTaskIds = plan.selected.map((item) => item.task?.id).filter(Boolean);
+  const simulatedAfter = simulateReleasedQueue(tasksBefore, new Set(selectedTaskIds));
+  let queueControlAfter = queueControlBefore;
+  let released = [];
+  let created = [];
+
+  if (!dryRun) {
+    queueControlAfter = await setLocalQueueControl({
+      holdNewTasks: true,
+      holdReason: queueControlBefore.holdReason || "windows_migration_precalibration",
+      activeReleaseJobIds: [...new Set([...queueControlBefore.activeReleaseJobIds, ...selectedJobIds])],
+    });
+    released = await releaseLocalQueueTasks(selectedTaskIds);
+    for (const candidate of plan.selected.filter((item) => !item.task)) {
+      const task = await enqueueNextWindowsTask(candidate.job);
+      if (task) created.push(task);
+    }
+  }
+
+  const result = {
+    ok: true,
+    dryRun,
+    operationKey: operationKey || null,
+    limit: boundedLimit,
+    queueControlBefore,
+    queueControlAfter: dryRun ? {
+      ...queueControlBefore,
+      holdNewTasks: true,
+      activeReleaseJobIds: [...new Set([...queueControlBefore.activeReleaseJobIds, ...selectedJobIds])],
+    } : queueControlAfter,
+    candidateCounts: plan.counts,
+    selectedCount: plan.selected.length,
+    queueCounts: {
+      before: queueCounts(tasksBefore),
+      after: queueCounts(dryRun ? simulatedAfter : await listLocalTasks({ limit: 10000 })),
+    },
+    activated: {
+      releasedExistingCount: dryRun ? selectedTaskIds.length : released.length,
+      createdCount: dryRun ? plan.selected.filter((item) => !item.task).length : created.length,
+    },
+    selected: plan.selected.map((item) => ({
+      jobId: item.job.id,
+      sourceId: item.job.sourceId,
+      title: item.job.title,
+      company: item.job.company,
+      taskType: item.taskType,
+      existingTaskId: item.task?.id || null,
+      existingTaskStatus: item.task?.status || null,
+      triageRelevance: item.job.details?.triage?.relevance || "unknown",
+      deepScore: item.job.details?.deepEvaluation?.overallScore ?? null,
+    })),
+  };
+  if (operationKey) {
+    await saveControlOperation("queue_release", operationKey, { result });
+  }
+  return result;
 }
 
 export async function executeJobSearchRun({ runId, trigger = "manual", slot = "morning", discoveryUrls = [] } = {}) {

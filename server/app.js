@@ -25,7 +25,9 @@ import { getAnalyticsSummary, recordAnalyticsEvent, recordAnalyticsEvents } from
 import { getAppUrl, getRuntimeStatus } from "./config.js";
 import {
   getJobSearchDashboard,
+  holdJobSearchLocalQueue,
   getJobSearchPlan,
+  releaseJobSearchLocalBacklog,
   getJobSearchRun,
   getJobSearchStatus,
   getJobSearchTaxonomy,
@@ -38,6 +40,16 @@ import {
   setJobSearchTaxonomyProposal,
   updateJobSearchFeedback,
 } from "./job-search.js";
+import { submitCollectorBatch } from "./job-search/collector-api.js";
+import {
+  claimWindowsWorkerTask,
+  completeWindowsWorkerTask,
+  failWindowsWorkerTask,
+  getWindowsWorkerHealth,
+  getWindowsWorkerQueue,
+  heartbeatWindowsWorkerTask,
+  requireJobSearchWorkerToken,
+} from "./job-search/worker-api.js";
 import { handleLeadRequest } from "./leads.js";
 import { handleMakhanaLeadRequest } from "./makhana-leads.js";
 import { buildProductInsightResponse } from "./insights.js";
@@ -322,6 +334,44 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  if (url.pathname.startsWith("/api/job-search/worker/")) {
+    requireJobSearchWorkerToken(request);
+
+    if (request.method === "GET" && url.pathname === "/api/job-search/worker/health") {
+      sendJson(response, 200, getWindowsWorkerHealth());
+      return true;
+    }
+    if (request.method === "GET" && url.pathname === "/api/job-search/worker/queue") {
+      sendJson(response, 200, await getWindowsWorkerQueue());
+      return true;
+    }
+
+    const body = await parseBody(request);
+    if (request.method === "POST" && url.pathname === "/api/job-search/worker/claim") {
+      sendJson(response, 200, await claimWindowsWorkerTask(body));
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/job-search/worker/heartbeat") {
+      sendJson(response, 200, await heartbeatWindowsWorkerTask(body));
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/job-search/worker/result") {
+      sendJson(response, 200, await completeWindowsWorkerTask(body));
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/job-search/worker/failure") {
+      sendJson(response, 200, await failWindowsWorkerTask(body));
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/job-search/worker/discovery-batch") {
+      sendJson(response, 200, await submitCollectorBatch(body));
+      return true;
+    }
+
+    sendJson(response, 404, { error: "Worker endpoint not found." });
+    return true;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/job-search/status") {
     sendJson(response, 200, getJobSearchStatus(sessionContext));
     return true;
@@ -486,6 +536,20 @@ async function handleApi(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/job-search/usage") {
     requireJobSearchAccess(sessionContext);
     sendJson(response, 200, { usage: await getJobSearchUsage() });
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/job-search/local-queue/hold") {
+    requireJobSearchAccess(sessionContext);
+    const body = await parseBody(request);
+    sendJson(response, 200, await holdJobSearchLocalQueue(body));
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/job-search/local-queue/release") {
+    requireJobSearchAccess(sessionContext);
+    const body = await parseBody(request);
+    sendJson(response, 200, await releaseJobSearchLocalBacklog(body));
     return true;
   }
 
@@ -775,7 +839,7 @@ export async function handleRequest(request, response) {
       sendText(response, 404, "Not found");
     }
   } catch (error) {
-    sendJson(response, error.statusCode || 500, {
+    sendJson(response, error.statusCode || (error.name === "ZodError" ? 400 : 500), {
       error: error.message,
     });
   }

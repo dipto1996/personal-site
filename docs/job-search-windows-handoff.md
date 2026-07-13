@@ -105,6 +105,8 @@ Do not release the production backlog until the Windows model achieves:
 - `server/job-search/workflow.js`: prompts and evaluation persistence
 - `server/job-search/providers.js`: model routing and structured output
 - `server/job-search/repository.js`: normalized tables and durable queue
+- `server/job-search/collector-api.js`: token-authenticated Windows discovery ingestion
+- `server/job-search/windows-collector.js`: LinkedIn, Wellfound, Google, and Bing collector normalization
 - `scripts/job-search-local-worker.mjs`: existing direct-Neon worker to replace
 - `scripts/job-search-local-collector.mjs`: metadata-first discovery
 - `server/job-search/title-ontology.js`: function and seniority candidate gate
@@ -119,3 +121,22 @@ Do not release the production backlog until the Windows model achieves:
 4. Run tests without starting a model.
 5. Present the model choice and expected memory budget for approval.
 6. Download and benchmark only the approved model.
+
+## Windows Implementation Status (2026-07-13)
+
+- Persistent checkout: `C:\Users\Riju\OneDrive_v1\Desktop\personal-site`
+- Branch/commit received: `codex/windows-job-worker-handoff` at `3f52ed854de659e199f39e4d064662c9ff85e9cc`
+- Selected model: `Qwen3-4B-Q4_K_M`, context 4096, concurrency 1
+- Runtime: official llama.cpp `b9987` Windows Vulkan build, loopback only
+- Worker boundary implemented under `/api/job-search/worker/*`
+- Collector batch boundary implemented at `/api/job-search/worker/discovery-batch`; Windows never receives `DATABASE_URL`
+- Owner queue migration controls implemented at `/api/job-search/local-queue/{hold,release}`
+- Lease tokens, heartbeat renewal, idempotent results, grounded-output validation, and bounded schema repair implemented
+- Hold/reconcile plus bounded backlog release support preserve evaluation history during migration
+- PowerShell install/setup/start/stop/status/uninstall scripts implemented for both worker and collector
+- Scheduled-task registration remains opt-in and intentionally disabled until deployment and token handoff
+- Preliminary two-job synthetic calibration passed after verdict-scale coherence hardening
+- No production deployment, production token, production queue claim, public listener, or full-backlog run performed
+
+See [`job-search-windows-report.md`](./job-search-windows-report.md) for measurements, hashes, calibration
+results, security verification, and the remaining production gate.

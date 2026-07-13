@@ -12,9 +12,13 @@
     "prod:smoke": "node scripts/vercel-prod-smoke.mjs",
     "demo:links": "node scripts/build-shareable-demo-links.mjs",
     "jobs:collect": "node scripts/job-search-local-collector.mjs",
+    "jobs:windows:collector": "node scripts/job-search-local-collector.mjs",
     "jobs:model": "zsh scripts/start-job-search-llm.sh",
     "jobs:worker": "node scripts/job-search-local-worker.mjs",
-    "jobs:install": "zsh scripts/install-job-search-local-services.sh"
+    "jobs:install": "zsh scripts/install-job-search-local-services.sh",
+    "jobs:windows:guard": "node scripts/job-search-windows-resource-guard.mjs --startup",
+    "jobs:windows:worker": "node scripts/job-search-windows-worker.mjs",
+    "jobs:windows:calibrate": "node scripts/job-search-windows-calibrate.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",

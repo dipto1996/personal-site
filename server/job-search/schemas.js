@@ -22,7 +22,7 @@ export function normalizeRoleFamilyId(value) {
   return "exploratory";
 }
 
-const evidenceSchema = z.object({
+export const evidenceSchema = z.object({
   claimType: z.string().min(1),
   value: z.string().min(1),
   sourceUrl: z.string().url().or(z.literal("")),
@@ -30,6 +30,22 @@ const evidenceSchema = z.object({
   sourceDate: z.string().default(""),
   confidence: confidenceSchema,
   evidenceType: z.enum(["explicit", "inferred", "unknown"]),
+});
+
+export const groundedEvidenceSchema = evidenceSchema.superRefine((claim, context) => {
+  if (["explicit", "inferred"].includes(claim.evidenceType)) {
+    if (!claim.sourceUrl) {
+      context.addIssue({ code: "custom", path: ["sourceUrl"], message: "Grounded claims require a source URL." });
+    }
+    if (!claim.supportingPassage.trim()) {
+      context.addIssue({ code: "custom", path: ["supportingPassage"], message: "Grounded claims require a supporting passage." });
+    }
+  }
+});
+
+export const evidenceExtractionSchema = z.object({
+  claims: z.array(groundedEvidenceSchema).max(20).default([]),
+  unknowns: z.array(z.string().min(1)).max(10).default([]),
 });
 
 export const triageSchema = z.object({

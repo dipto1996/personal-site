@@ -21,13 +21,65 @@ export function compact(value, maxLength = 4000) {
   return normalizeString(value).replace(/\s+/g, " ").slice(0, maxLength);
 }
 
-export function parseTimestamp(value) {
-  if (!value) {
+function relativeTimestampMs(quantity, unit) {
+  const amount = Number(quantity);
+  if (!Number.isFinite(amount) || amount < 0) {
     return null;
   }
+  const normalizedUnit = String(unit || "").toLowerCase();
+  const unitMs = {
+    min: 60_000,
+    mins: 60_000,
+    minute: 60_000,
+    minutes: 60_000,
+    hr: 3_600_000,
+    hrs: 3_600_000,
+    hour: 3_600_000,
+    hours: 3_600_000,
+    day: 86_400_000,
+    days: 86_400_000,
+    week: 604_800_000,
+    weeks: 604_800_000,
+  };
+  return unitMs[normalizedUnit] ? amount * unitMs[normalizedUnit] : null;
+}
 
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+export function normalizeTimestampInput(value, { now = new Date() } = {}) {
+  const raw = normalizeString(value);
+  if (!raw) {
+    return { iso: null, raw: "" };
+  }
+
+  const direct = new Date(raw);
+  if (!Number.isNaN(direct.getTime())) {
+    return { iso: direct.toISOString(), raw };
+  }
+
+  const normalized = raw.toLowerCase().replace(/\s+/g, " ").trim();
+  if (["today", "just now", "just posted", "new"].includes(normalized)) {
+    return { iso: now.toISOString(), raw };
+  }
+  if (normalized === "yesterday") {
+    return { iso: new Date(now.getTime() - 86_400_000).toISOString(), raw };
+  }
+
+  const relative = normalized.match(
+    /^(?:posted\s+|reposted\s+)?(?:(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours|day|days|week|weeks)\s+ago|(a|an)\s+(minute|hour|day|week)\s+ago)$/,
+  );
+  if (relative) {
+    const quantity = relative[1] ? Number(relative[1]) : 1;
+    const unit = relative[2] || relative[4];
+    const deltaMs = relativeTimestampMs(quantity, unit);
+    if (deltaMs !== null) {
+      return { iso: new Date(now.getTime() - deltaMs).toISOString(), raw };
+    }
+  }
+
+  return { iso: null, raw };
+}
+
+export function parseTimestamp(value) {
+  return normalizeTimestampInput(value).iso;
 }
 
 export function parseCsv(value) {

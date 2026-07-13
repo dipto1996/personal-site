@@ -4,6 +4,7 @@ param(
   [string]$NodePath = 'C:\Users\Riju\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe',
   [Parameter(Mandatory = $true)][string]$LlamaServerPath,
   [Parameter(Mandatory = $true)][string]$ModelPath,
+  [switch]$ReplaceCredential,
   [switch]$SkipScheduledTask,
   [switch]$RegisterScheduledTask
 )
@@ -17,11 +18,16 @@ if (-not (Test-Path -LiteralPath $LlamaServerPath -PathType Leaf)) { throw "llam
 if (-not (Test-Path -LiteralPath $ModelPath -PathType Leaf)) { throw "The model was not found at $ModelPath" }
 Assert-ApprovedModelPath $ModelPath
 
-$secureToken = Read-Host 'Paste JOBSEARCH_WORKER_TOKEN (stored with Windows DPAPI for this user)' -AsSecureString
-$credential = [pscredential]::new('job-worker', $secureToken)
+$credential = $null
+if ($ReplaceCredential -or -not (Test-Path -LiteralPath $script:WorkerCredentialPath)) {
+  $secureToken = Read-Host 'Paste JOBSEARCH_WORKER_TOKEN (stored with Windows DPAPI for this user)' -AsSecureString
+  $credential = [pscredential]::new('job-worker', $secureToken)
+  $credential | Export-Clixml -LiteralPath $script:WorkerCredentialPath -Force
+} else {
+  $credential = Get-WorkerCredential
+}
 $plainLength = $credential.GetNetworkCredential().Password.Length
 if ($plainLength -lt 32) { throw 'JOBSEARCH_WORKER_TOKEN must contain at least 32 characters.' }
-$credential | Export-Clixml -LiteralPath $script:WorkerCredentialPath -Force
 
 $config = [ordered]@{
   protocolVersion = 'job-worker-2026-07-v1'

@@ -38,6 +38,7 @@ import {
   saveTitlePattern,
   saveControlOperation,
   setLocalQueueControl,
+  setLocalTaskStatus,
   updateRun,
   upsertCompany,
   upsertJob,
@@ -1229,6 +1230,55 @@ export async function releaseHeldWindowsBacklog({
   };
   if (operationKey) {
     await saveControlOperation("queue_release", operationKey, { result });
+  }
+  return result;
+}
+
+export async function retryFailedWindowsTasks({
+  operationKey = "",
+  dryRun = false,
+  limit = 20,
+} = {}) {
+  if (operationKey) {
+    const existing = await getControlOperation("queue_retry_failed", operationKey);
+    if (existing?.result) return existing.result;
+  }
+
+  const boundedLimit = boundedReleaseLimit(limit, 20, 200);
+  const [queueControl, tasks] = await Promise.all([
+    getLocalQueueControl(),
+    listLocalTasks({ statuses: ["failed"], limit: 10000 }),
+  ]);
+  const activeJobIds = new Set(queueControl.activeReleaseJobIds);
+  const selected = tasks
+    .filter((task) => activeJobIds.has(task.jobId) && ["deep", "critic", "outreach"].includes(task.taskType))
+    .slice(0, boundedLimit);
+
+  let retried = [];
+  if (!dryRun) {
+    retried = (await Promise.all(selected.map((task) => setLocalTaskStatus(task.id, {
+      status: "queued",
+      availableAt: new Date().toISOString(),
+      clearLease: true,
+      completedAt: null,
+    })))).filter(Boolean);
+  }
+
+  const result = {
+    ok: true,
+    dryRun,
+    operationKey: operationKey || null,
+    selectedCount: selected.length,
+    retriedCount: dryRun ? selected.length : retried.length,
+    selected: selected.map((task) => ({
+      taskId: task.id,
+      jobId: task.jobId,
+      taskType: task.taskType,
+      attempts: task.attempts,
+    })),
+  };
+  if (operationKey) {
+    await saveControlOperation("queue_retry_failed", operationKey, { result });
   }
   return result;
 }

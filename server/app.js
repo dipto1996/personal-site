@@ -28,6 +28,7 @@ import {
   holdJobSearchLocalQueue,
   getJobSearchPlan,
   releaseJobSearchLocalBacklog,
+  retryFailedJobSearchLocalTasks,
   getJobSearchRun,
   getJobSearchStatus,
   getJobSearchTaxonomy,
@@ -353,6 +354,10 @@ async function handleApi(request, response, url) {
     }
     if (request.method === "POST" && url.pathname === "/api/job-search/worker/queue/release") {
       sendJson(response, 200, await releaseJobSearchLocalBacklog(body));
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/job-search/worker/queue/retry-failed") {
+      sendJson(response, 200, await retryFailedJobSearchLocalTasks(body));
       return true;
     }
     if (request.method === "POST" && url.pathname === "/api/job-search/worker/claim") {

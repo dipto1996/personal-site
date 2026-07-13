@@ -255,6 +255,26 @@ test("worker token can hold and release a bounded calibration cohort", async () 
     assert.equal(release.response.status, 200);
     assert.equal(release.payload.selectedCount, 1);
     assert.equal(release.payload.selected[0].jobId, job.id);
+
+    const [releasedTask] = await repository.listLocalTasks({ taskTypes: ["deep"] });
+    await repository.setLocalTaskStatus(releasedTask.id, {
+      status: "failed",
+      lastError: "Historic context-window failure",
+    });
+    const retryFailed = await jsonFetch(server.baseUrl, "/api/job-search/worker/queue/retry-failed", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "worker-retry-failed-authorized", limit: 10 }),
+    });
+    assert.equal(retryFailed.response.status, 200);
+    assert.equal(retryFailed.payload.selectedCount, 1);
+    assert.equal(retryFailed.payload.retriedCount, 1);
+    const replay = await jsonFetch(server.baseUrl, "/api/job-search/worker/queue/retry-failed", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "worker-retry-failed-authorized", limit: 10 }),
+    });
+    assert.deepEqual(replay.payload, retryFailed.payload);
   } finally {
     await server.close();
   }

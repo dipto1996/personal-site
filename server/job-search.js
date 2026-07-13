@@ -7,6 +7,7 @@ import {
   enqueueNextWindowsTask,
   reconcileHeldWindowsQueue,
   releaseHeldWindowsBacklog,
+  retryFailedWindowsTasks,
 } from "./job-search/workflow.js";
 import {
   createRun,
@@ -302,6 +303,20 @@ export async function releaseJobSearchLocalBacklog(input = {}) {
     throw error;
   }
   return releaseHeldWindowsBacklog({
+    operationKey: String(input.operationKey || "").trim(),
+    dryRun: input.dryRun === true,
+    limit: input.limit,
+  });
+}
+
+export async function retryFailedJobSearchLocalTasks(input = {}) {
+  await ensureJobSearchRepository();
+  if (!String(input.operationKey || "").trim()) {
+    const error = new Error("operationKey is required for idempotent failed-task recovery operations.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return retryFailedWindowsTasks({
     operationKey: String(input.operationKey || "").trim(),
     dryRun: input.dryRun === true,
     limit: input.limit,

@@ -8,6 +8,7 @@ import {
   uniqueBy,
 } from "./utils.js";
 import { getConfiguredAtsSources } from "./profile.js";
+import { classifyCandidateTitle } from "./title-ontology.js";
 
 function boardLabel(token) {
   return normalizeString(token)
@@ -175,7 +176,17 @@ function normalizeWorkdayJob(job, descriptor, sourceQuery = "workday_job") {
     postedAt: parseTimestamp(info.startDate || info.postedOn),
     sourceQuery,
     sourceProvider: "workday",
-    raw: { ats: { provider: "workday", tenant: descriptor.tenant, site: descriptor.site, validated: true }, job },
+    raw: {
+      ats: {
+        provider: "workday",
+        tenant: descriptor.tenant,
+        site: descriptor.site,
+        host: descriptor.host,
+        jobPath: descriptor.jobPath || "",
+        validated: true,
+      },
+      job,
+    },
   };
 }
 
@@ -228,6 +239,27 @@ async function fetchWorkdayJob(descriptor, sourceQuery = "workday_job") {
   const endpoint = `https://${descriptor.host}/wday/cxs/${encodeURIComponent(descriptor.tenant)}/${encodeURIComponent(descriptor.site)}/job/${descriptor.jobPath}`;
   const payload = await fetchJson(endpoint);
   return [normalizeWorkdayJob(payload, descriptor, sourceQuery)];
+}
+
+async function fetchWorkdayBoard(descriptor, sourceQuery = "known_company_workday") {
+  const endpoint = `https://${descriptor.host}/wday/cxs/${encodeURIComponent(descriptor.tenant)}/${encodeURIComponent(descriptor.site)}/jobs`;
+  const response = await fetchWithTimeout(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ appliedFacets: {}, limit: 100, offset: 0, searchText: "" }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || `Workday board request failed with ${response.status}`);
+  const postings = Array.isArray(payload.jobPostings) ? payload.jobPostings : [];
+  const likelyMatches = postings.filter((posting) => classifyCandidateTitle(posting.title || "").eligible).slice(0, 50);
+  const settled = await Promise.allSettled(likelyMatches.map((posting) => {
+    const externalPath = normalizeString(posting.externalPath);
+    const path = externalPath.includes("/job/")
+      ? externalPath.split("/job/").pop()
+      : externalPath.replace(/^\/+/, "").replace(/^job\//, "");
+    return path ? fetchWorkdayJob({ ...descriptor, jobPath: path }, sourceQuery) : [];
+  }));
+  return settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 }
 
 function extractJsonLdJobPosting(html) {
@@ -343,7 +375,9 @@ export async function fetchJobsFromAtsDescriptor(descriptor, sourceQuery = "ats_
   }
 
   if (descriptor.provider === "workday") {
-    return fetchWorkdayJob(descriptor, sourceQuery);
+    return descriptor.jobPath
+      ? fetchWorkdayJob(descriptor, sourceQuery)
+      : fetchWorkdayBoard(descriptor, sourceQuery);
   }
 
   if (descriptor.provider === "smartrecruiters") {
@@ -351,6 +385,71 @@ export async function fetchJobsFromAtsDescriptor(descriptor, sourceQuery = "ats_
   }
 
   return fetchGenericJobPage(descriptor.url, sourceQuery);
+}
+
+function knownCompanyDescriptor(company) {
+  const provider = normalizeString(company?.atsProvider).toLowerCase();
+  const identifier = normalizeString(company?.atsIdentifier);
+  const stored = company?.metadata?.atsDescriptor && typeof company.metadata.atsDescriptor === "object"
+    ? company.metadata.atsDescriptor
+    : {};
+  if (provider === "greenhouse" && (stored.boardToken || identifier)) {
+    return { provider, boardToken: stored.boardToken || identifier };
+  }
+  if (["lever", "ashby", "smartrecruiters"].includes(provider) && (stored.company || identifier)) {
+    return { provider, company: stored.company || identifier };
+  }
+  if (provider === "workday" && stored.host && (stored.tenant || identifier) && stored.site) {
+    return { provider, host: stored.host, tenant: stored.tenant || identifier, site: stored.site };
+  }
+  return null;
+}
+
+function filterKnownCompanyCandidates(jobs) {
+  const eligible = [];
+  const exploratory = [];
+  for (const job of jobs) {
+    if (classifyCandidateTitle(job.title).eligible) eligible.push(job);
+    else if (exploratory.length < 2) exploratory.push(job);
+  }
+  return [...eligible, ...exploratory];
+}
+
+export async function fetchKnownCompanyAtsJobs(companies = [], { limit = 8, rotationKey = new Date().toISOString().slice(0, 10) } = {}) {
+  const available = uniqueBy(companies
+    .map((company) => ({ company, descriptor: knownCompanyDescriptor(company) }))
+    .filter((item) => item.descriptor), (item) => JSON.stringify(item.descriptor));
+  const offset = available.length
+    ? Number.parseInt(sourceHash(rotationKey).slice(0, 8), 16) % available.length
+    : 0;
+  const descriptors = [...available.slice(offset), ...available.slice(0, offset)].slice(0, limit);
+  const provider = {
+    status: descriptors.length ? "fetching" : "no_known_boards",
+    attempted: descriptors.length,
+    completed: 0,
+    fetched: 0,
+    errors: [],
+  };
+  const jobs = [];
+  for (const { company, descriptor } of descriptors) {
+    try {
+      const fetched = await fetchJobsFromAtsDescriptor(descriptor, `known_company_${descriptor.provider}`);
+      jobs.push(...filterKnownCompanyCandidates(fetched).map((job) => ({
+        ...job,
+        company: job.company || company.name,
+        raw: {
+          ...(job.raw || {}),
+          knownCompanyRefresh: { companyId: company.id, companyName: company.name },
+        },
+      })));
+      provider.completed += 1;
+    } catch (error) {
+      provider.errors.push({ company: company.name, provider: descriptor.provider, error: error.message });
+    }
+  }
+  provider.fetched = jobs.length;
+  provider.status = provider.completed ? (provider.errors.length ? "partial" : "live") : descriptors.length ? "error" : provider.status;
+  return { jobs: uniqueBy(jobs, (job) => job.sourceId), provider };
 }
 
 export async function fetchConfiguredAtsJobs() {

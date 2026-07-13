@@ -42,6 +42,7 @@ $config = [ordered]@{
   modelBaseUrl = 'http://127.0.0.1:8080/v1'
   workerId = "$($env:COMPUTERNAME.ToLowerInvariant()):windows-job-worker"
   contextTokens = 8192
+  gpuLayers = 24
   concurrency = 1
   idleShutdownSeconds = 300
   configuredAt = (Get-Date).ToUniversalTime().ToString('o')

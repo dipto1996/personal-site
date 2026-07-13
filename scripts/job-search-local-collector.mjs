@@ -10,9 +10,10 @@ import { chromium } from "playwright-core";
 
 import { buildLocalBrowserSearchPlan, QUERY_BUNDLES } from "../server/job-search/discovery.js";
 import {
-  WINDOWS_COLLECTOR_SOURCES,
+  WINDOWS_COLLECTOR_DEFAULT_SOURCES,
   canonicalCollectorUrl,
   dedupeCollectorJobs,
+  extractBingRssResults,
   extractCanonicalApplyUrl,
   extractCollectorJobPage,
   extractLinkedInJobsFromHtml,
@@ -31,7 +32,7 @@ const valueArg = (name, fallback) => {
 };
 
 const headless = args.has("--headless");
-const sources = normalizeCollectorSources(valueArg("--sources", WINDOWS_COLLECTOR_SOURCES.join(",")));
+const sources = normalizeCollectorSources(valueArg("--sources", WINDOWS_COLLECTOR_DEFAULT_SOURCES.join(",")));
 const maxQueries = Math.max(1, Math.min(12, Number(valueArg("--max-queries", "8")) || 8));
 const maxPages = Math.max(1, Math.min(6, Number(valueArg("--max-pages", "3")) || 3));
 const maxJobs = Math.max(10, Math.min(120, Number(valueArg("--max-jobs", "80")) || 80));
@@ -47,6 +48,16 @@ const chromePath = valueArg("--chrome", process.platform === "win32"
   : "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
 const runLabel = valueArg("--run-label", "Windows collector");
 const collectorRunId = `jsrun_collector_${randomUUID().replaceAll("-", "")}`;
+const WELLFOUND_ROLE_SLUGS = {
+  analytics: "analytics-manager",
+  science: "data-science-manager",
+  "ai-data-product": "product-manager",
+  strategy: "business-analyst",
+  "governance-risk": "risk-analyst",
+  "architecture-platform": "data-architect",
+  "business-operator": "operations-manager",
+  finserv: "data-analysis-manager",
+};
 
 if (!endpoint || (!endpoint.startsWith("https://") && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(endpoint))) {
   throw new Error("JOBSEARCH_WORKER_BASE_URL must use HTTPS (loopback HTTP is allowed only for local testing).");
@@ -59,20 +70,28 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function googleSearchUrl(query) {
+function googleSearchUrl(query, pageIndex = 0) {
   const url = new URL("https://www.google.com/search");
   url.searchParams.set("q", query);
   url.searchParams.set("num", "100");
   url.searchParams.set("hl", "en");
   url.searchParams.set("filter", "0");
   url.searchParams.set("tbs", "qdr:d");
+  if (pageIndex) url.searchParams.set("start", String(pageIndex * 100));
   return url.toString();
 }
 
-function bingSearchUrl(query) {
+function bingSearchUrl(query, pageIndex = 0) {
   const url = new URL("https://www.bing.com/search");
   url.searchParams.set("q", query);
   url.searchParams.set("count", "50");
+  if (pageIndex) url.searchParams.set("first", String((pageIndex * 50) + 1));
+  return url.toString();
+}
+
+function bingRssSearchUrl(query, pageIndex = 0) {
+  const url = new URL(bingSearchUrl(query, pageIndex));
+  url.searchParams.set("format", "rss");
   return url.toString();
 }
 
@@ -84,9 +103,10 @@ function linkedInSearchUrl(query, pageIndex) {
   return url.toString();
 }
 
-function wellfoundSearchUrl(query, pageIndex) {
-  const url = new URL("https://wellfound.com/jobs");
-  url.searchParams.set("query", query);
+function wellfoundSearchUrl(querySpec, pageIndex) {
+  const shardId = String(querySpec.id || "").split(":")[0];
+  const roleSlug = WELLFOUND_ROLE_SLUGS[shardId] || "data-analysis-manager";
+  const url = new URL(`https://wellfound.com/role/${roleSlug}`);
   url.searchParams.set("page", String(pageIndex + 1));
   return url.toString();
 }
@@ -110,6 +130,34 @@ async function assertVisibleSearch(page, sourceId) {
     error.code = "blocked";
     throw error;
   }
+}
+
+async function collectBingFallback(sourceId, queries) {
+  const jobs = [];
+  const errors = [];
+  let pagesVisited = 0;
+  for (const querySpec of queries) {
+    const query = sourceId === "wellfound"
+      ? `site:wellfound.com/jobs ${querySpec.query}`
+      : querySpec.query;
+    try {
+      const response = await fetch(bingRssSearchUrl(query), {
+        headers: { accept: "application/rss+xml, application/xml, text/xml" },
+        signal: AbortSignal.timeout(45_000),
+      });
+      if (!response.ok) throw new Error(`Bing RSS request failed with ${response.status}`);
+      pagesVisited += 1;
+      const extracted = extractBingRssResults(await response.text(), {
+        sourceQuery: `${querySpec.id}:${sourceId}_fallback`,
+      }).filter((job) => sourceId !== "wellfound" || /wellfound\.com\/jobs\//i.test(job.url));
+      jobs.push(...extracted);
+    } catch (error) {
+      errors.push(String(error.message || error).slice(0, 500));
+    }
+    if (jobs.length >= maxJobs) break;
+    await sleep(600 + Math.floor(Math.random() * 500));
+  }
+  return { jobs, errors, pagesVisited };
 }
 
 async function resolveCanonicalUrl(context, job) {
@@ -145,6 +193,7 @@ async function collectSource(context, sourceId, queries) {
     blocked: false,
     errors: [],
     notes: "",
+    fallbacks: [],
     sampleUrls: [],
   };
   const jobs = [];
@@ -153,25 +202,39 @@ async function collectSource(context, sourceId, queries) {
     for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
       try {
         let targetUrl = "";
-        if (sourceId === "google") targetUrl = googleSearchUrl(querySpec.query);
-        if (sourceId === "bing") targetUrl = bingSearchUrl(querySpec.query);
+        if (sourceId === "google") targetUrl = googleSearchUrl(querySpec.query, pageIndex);
+        if (sourceId === "bing") targetUrl = bingRssSearchUrl(querySpec.query, pageIndex);
         if (sourceId === "linkedin") targetUrl = linkedInSearchUrl(querySpec.query, pageIndex);
-        if (sourceId === "wellfound") targetUrl = wellfoundSearchUrl(querySpec.query, pageIndex);
-        await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
-        await maybeDismissConsent(page);
-        await assertVisibleSearch(page, sourceId);
-        for (let scroll = 0; scroll < 3; scroll += 1) {
-          await page.mouse.wheel(0, 2200).catch(() => undefined);
-          await page.waitForTimeout(500);
-        }
-        const html = await page.content();
+        if (sourceId === "wellfound") targetUrl = wellfoundSearchUrl(querySpec, pageIndex);
         let extracted = [];
-        if (sourceId === "google" || sourceId === "bing") {
-          extracted = extractSearchResultsFromHtml(html, { engine: sourceId, sourceQuery: querySpec.id });
-        } else if (sourceId === "linkedin") {
-          extracted = extractLinkedInJobsFromHtml(html, { sourceQuery: querySpec.id });
-        } else if (sourceId === "wellfound") {
-          extracted = extractWellfoundJobsFromHtml(html, { sourceQuery: querySpec.id });
+        if (sourceId === "bing") {
+          const response = await fetch(targetUrl, {
+            headers: { accept: "application/rss+xml, application/xml, text/xml" },
+            signal: AbortSignal.timeout(45_000),
+          });
+          if (!response.ok) throw new Error(`Bing RSS request failed with ${response.status}`);
+          extracted = extractBingRssResults(await response.text(), { sourceQuery: querySpec.id });
+        } else {
+          const navigation = await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+          if (navigation && navigation.status() >= 400) {
+            const error = new Error(`${sourceId} returned HTTP ${navigation.status()}; using indexed-search fallback.`);
+            error.code = "blocked";
+            throw error;
+          }
+          await maybeDismissConsent(page);
+          await assertVisibleSearch(page, sourceId);
+          for (let scroll = 0; scroll < 3; scroll += 1) {
+            await page.mouse.wheel(0, 2200).catch(() => undefined);
+            await page.waitForTimeout(500);
+          }
+          const html = await page.content();
+          if (sourceId === "google") {
+            extracted = extractSearchResultsFromHtml(html, { engine: sourceId, sourceQuery: querySpec.id });
+          } else if (sourceId === "linkedin") {
+            extracted = extractLinkedInJobsFromHtml(html, { sourceQuery: querySpec.id });
+          } else if (sourceId === "wellfound") {
+            extracted = extractWellfoundJobsFromHtml(html, { sourceQuery: querySpec.id });
+          }
         }
         jobs.push(...extracted);
         sourceHealth.pagesVisited += 1;
@@ -191,6 +254,24 @@ async function collectSource(context, sourceId, queries) {
       if (jobs.length >= maxJobs) break;
     }
     if (sourceHealth.blocked || jobs.length >= maxJobs) break;
+  }
+
+  if ((sourceId === "google" && sourceHealth.blocked) || (sourceId === "wellfound" && (sourceHealth.blocked || !jobs.length))) {
+    const fallback = await collectBingFallback(sourceId, queries);
+    jobs.push(...fallback.jobs);
+    sourceHealth.errors.push(...fallback.errors);
+    sourceHealth.fallbacks.push({ provider: "bing_xray", resultCount: fallback.jobs.length });
+    sourceHealth.pagesVisited += fallback.pagesVisited;
+    sourceHealth.resultCount += fallback.jobs.length;
+    fallback.jobs.slice(0, 5).forEach((item) => {
+      if (item.url && sourceHealth.sampleUrls.length < 5) sourceHealth.sampleUrls.push(item.url);
+    });
+    sourceHealth.notes = sourceId === "google"
+      ? "Direct Google was challenged; Bing RSS x-ray attempted the same query plan. Cloud SerpApi remains the Google Jobs primary."
+      : "Direct Wellfound was unavailable; Bing RSS x-ray attempted indexed Wellfound URLs. Cloud Brave x-ray remains the primary fallback.";
+    if (fallback.jobs.length) {
+      sourceHealth.status = "partial";
+    }
   }
 
   sourceHealth.jobCount = jobs.length;

@@ -3,7 +3,7 @@ param(
   [string]$Endpoint = 'https://tradegraph-india-site.vercel.app',
   [string]$NodePath = 'C:\Users\Riju\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe',
   [string]$ChromePath = 'C:\Program Files\Google\Chrome\Application\chrome.exe',
-  [string]$Sources = 'linkedin,wellfound,google,bing',
+  [string]$Sources = 'linkedin',
   [string]$MorningTime = '06:15',
   [string]$EveningTime = '18:15',
   [switch]$SkipScheduledTask,

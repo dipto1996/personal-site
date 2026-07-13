@@ -28,6 +28,7 @@ $env:JOBSEARCH_LLAMA_SERVER_PATH = $config.llamaServerPath
 $env:JOBSEARCH_LOCAL_MODEL_PATH = $config.modelPath
 $env:JOBSEARCH_LOCAL_LLM_MODEL = $config.modelName
 $env:JOBSEARCH_LOCAL_LLM_BASE_URL = $config.modelBaseUrl
+$env:JOBSEARCH_LOCAL_GPU_LAYERS = if ($null -ne $config.gpuLayers) { [string]$config.gpuLayers } else { '24' }
 
 $workerArgs = @("`"$($config.workerScript)`"")
 if ($Once) { $workerArgs += '--once' }

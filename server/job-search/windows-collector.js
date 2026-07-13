@@ -6,13 +6,15 @@ import { detectAtsFromUrl } from "./ats.js";
 import { compact, normalizeString, normalizeTimestampInput, sourceHash, stripHtml } from "./utils.js";
 
 export const WINDOWS_COLLECTOR_SOURCES = ["linkedin", "wellfound", "google", "bing"];
+export const WINDOWS_COLLECTOR_DEFAULT_SOURCES = ["linkedin"];
 const KNOWN_ENGINES = new Set(["google", "bing"]);
+const JOB_RESULT_URL = /(linkedin\.com\/jobs\/view|wellfound\.com\/jobs\/|workatastartup\.com\/jobs\/|builtin\.com\/job\/|welcometothejungle\.com\/.+\/jobs\/|aistartupjobs\.com|dataaxy\.com|weworkremotely\.com\/remote-jobs\/|remoteok\.com\/remote-jobs\/|greenhouse|lever|ashby|workday|smartrecruiters|workable|icims|jobvite|bamboohr|breezy)/i;
 
 function hashId(prefix, ...parts) {
   return `${prefix}_${createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 24)}`;
 }
 
-export function normalizeCollectorSources(input, fallback = WINDOWS_COLLECTOR_SOURCES) {
+export function normalizeCollectorSources(input, fallback = WINDOWS_COLLECTOR_DEFAULT_SOURCES) {
   const values = Array.isArray(input)
     ? input
     : String(input || "")
@@ -29,6 +31,20 @@ export function canonicalCollectorUrl(value) {
     const url = new URL(value, "https://www.google.com");
     if (url.hostname.endsWith("google.com") && url.pathname === "/url") {
       return canonicalCollectorUrl(url.searchParams.get("q") || url.searchParams.get("url") || "");
+    }
+    if (url.hostname.endsWith("bing.com") && url.pathname === "/ck/a") {
+      const direct = url.searchParams.get("url") || url.searchParams.get("r");
+      if (direct) return canonicalCollectorUrl(direct);
+      const encoded = url.searchParams.get("u") || "";
+      if (encoded) {
+        try {
+          const payload = encoded.startsWith("a1") ? encoded.slice(2) : encoded;
+          const decoded = Buffer.from(payload, "base64url").toString("utf8");
+          if (/^https?:\/\//i.test(decoded)) return canonicalCollectorUrl(decoded);
+        } catch {
+          // Keep the original URL if Bing changes its redirect encoding.
+        }
+      }
     }
     ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "trk", "trackingId", "ref", "refId"].forEach((key) => {
       url.searchParams.delete(key);
@@ -220,7 +236,8 @@ export function extractSearchResultsFromHtml(html, { engine = "google", sourceQu
     const $anchor = $(anchor);
     const title = normalizeString($anchor.find("h3,h2").first().text() || $anchor.attr("aria-label") || $anchor.text());
     const url = canonicalCollectorUrl($anchor.attr("href"));
-    const snippet = compact($anchor.parent().text(), 1200);
+    const resultContainer = $anchor.closest("li.b_algo, .b_algo, .MjjYud, .g, [data-snhf]");
+    const snippet = compact((resultContainer.length ? resultContainer : $anchor.parent()).text(), 1200);
     const provider = /linkedin\.com\/jobs\/view/i.test(url)
       ? "linkedin"
       : /wellfound\.com\/jobs\//i.test(url)
@@ -237,7 +254,28 @@ export function extractSearchResultsFromHtml(html, { engine = "google", sourceQu
       sourceProvider: `${engine}_xray`,
       sourceQuery,
     });
-  }).filter((item) => item.url && item.title && /(linkedin\.com\/jobs\/view|wellfound\.com\/jobs\/|greenhouse|lever|ashby|workday|smartrecruiters)/i.test(item.url));
+  }).filter((item) => item.url && item.title && JOB_RESULT_URL.test(item.url));
+}
+
+export function extractBingRssResults(xml, { sourceQuery = "" } = {}) {
+  const $ = cheerio.load(xml, { xmlMode: true });
+  return $("item").toArray().map((item) => {
+    const $item = $(item);
+    const url = canonicalCollectorUrl($item.find("link").first().text());
+    const title = normalizeString($item.find("title").first().text());
+    const description = compact(stripHtml($item.find("description").first().text()), 1200);
+    return normalizeCollectorJob({
+      title,
+      company: "",
+      description,
+      snippet: description,
+      url,
+      postedAt: normalizeString($item.find("pubDate").first().text()),
+    }, {
+      sourceProvider: "bing_rss_xray",
+      sourceQuery,
+    });
+  }).filter((item) => item.url && item.title && JOB_RESULT_URL.test(item.url));
 }
 
 export function extractLinkedInJobsFromHtml(html, { sourceQuery = "" } = {}) {
@@ -275,7 +313,8 @@ export function extractWellfoundJobsFromHtml(html, { sourceQuery = "" } = {}) {
     const $card = $(card);
     const link = canonicalCollectorUrl($card.attr("href") || attributeFrom($card, "a[href*='/jobs/']", "href"));
     if (!/wellfound\.com\/jobs\//i.test(link)) continue;
-    const title = textFrom(card, "h2, h3, [data-test='JobTitle']");
+    const title = textFrom(card, "h2, h3, [data-test='JobTitle']")
+      || normalizeString($card.attr("aria-label") || $card.text());
     const company = textFrom(card, "[data-test='StartupName'], .styles_startupName");
     const location = textFrom(card, "[data-test='Location'], .styles_location");
     const postedAtRaw = textFrom(card, "time, [data-test='PostedAt'], .styles_metadata");

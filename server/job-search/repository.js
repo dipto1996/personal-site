@@ -656,6 +656,22 @@ export async function getJob(jobId) {
   return row || null;
 }
 
+export async function getJobByCanonicalUrl(canonicalUrl) {
+  await ensureJobSearchRepository();
+  if (!canonicalUrl) return null;
+  if (!hasDatabase()) {
+    return (await readLocal()).jobs.find((job) => job.canonicalUrl === canonicalUrl) || null;
+  }
+  const sql = getSql();
+  const [row] = await sql`SELECT id, source_id AS "sourceId", canonical_url AS "canonicalUrl", title,
+    normalized_title AS "normalizedTitle", company, location, description, posted_at AS "postedAt",
+    source_provider AS "sourceProvider", source_query AS "sourceQuery", content_hash AS "contentHash",
+    role_family_id AS "roleFamilyId", status, disposition, details, first_seen_at AS "firstSeenAt",
+    last_seen_at AS "lastSeenAt", created_at AS "createdAt", updated_at AS "updatedAt"
+    FROM js_jobs WHERE canonical_url=${canonicalUrl} ORDER BY updated_at DESC LIMIT 1`;
+  return row || null;
+}
+
 export async function listJobs({ view = "inbox", limit = 500 } = {}) {
   await ensureJobSearchRepository();
   const filter = (job) => {

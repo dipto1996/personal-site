@@ -141,8 +141,8 @@ Local operations:
 
 ```bash
 vercel env pull .env.local --environment=production
-npm run jobs:collect                 # visible Chrome sources=linkedin,wellfound,google,bing
-npm run jobs:collect -- --headless --sources=linkedin,wellfound  # explicit portal-only run
+npm run jobs:collect                 # visible Chrome, LinkedIn supplemental collector
+npm run jobs:collect -- --headless --sources=linkedin,wellfound,google,bing  # explicit diagnostics; cloud search remains primary
 npm run jobs:model                   # macOS development only; Qwen3-4B loopback helper
 npm run jobs:worker                  # existing direct-Neon worker; being replaced for Windows
 npm run jobs:install                 # macOS launch agents; do not run on Windows

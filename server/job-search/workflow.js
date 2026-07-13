@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { fetchConfiguredAtsJobs, validateDiscoveryCandidates } from "./ats.js";
+import { fetchConfiguredAtsJobs, fetchKnownCompanyAtsJobs, validateDiscoveryCandidates } from "./ats.js";
 import { buildSearchPlan, getManualDiscoveryUrls } from "./discovery.js";
 import { TARGET_PROFILE } from "./profile.js";
 import {
@@ -19,6 +19,7 @@ import {
   enqueueLocalTask,
   getControlOperation,
   getJob,
+  getJobByCanonicalUrl,
   getCalibrationStatus,
   getLocalQueueControl,
   getRun,
@@ -69,10 +70,27 @@ function hash(...parts) {
   return createHash("sha256").update(parts.join("|")).digest("hex");
 }
 
+function sourceDomain(value, sourceProvider = "") {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+    if (/linkedin\.com|wellfound\.com|workatastartup\.com|builtin\.com|google\.com|bing\.com/.test(hostname)) return "";
+    if (sourceProvider === "generic_page" || /career|jobs/.test(hostname)) return hostname;
+  } catch {
+    // Some discovery records are metadata-only until extraction.
+  }
+  return "";
+}
+
 function chunks(items, size) {
   const result = [];
   for (let index = 0; index < items.length; index += size) result.push(items.slice(index, index + size));
   return result;
+}
+
+function rotateItems(items, count, seed) {
+  if (!items.length) return [];
+  const offset = Number.parseInt(hash(seed).slice(0, 8), 16) % items.length;
+  return [...items.slice(offset), ...items.slice(0, offset)].slice(0, count);
 }
 
 function uniqueJobs(jobs) {
@@ -84,6 +102,28 @@ function uniqueJobs(jobs) {
     if (!existing || job.description.length > existing.description.length) byKey.set(key, job);
   });
   return [...byKey.values()];
+}
+
+function metadataCandidateJob(candidate) {
+  if (!candidate?.url || !candidate?.title || !candidate?.description) return null;
+  if (!/(linkedin\.com\/jobs\/view|wellfound\.com\/jobs\/|greenhouse|lever|ashby|workday|smartrecruiters|workable|icims|jobvite|bamboohr|breezy)/i.test(candidate.url)) return null;
+  const unbrandedTitle = candidate.title.replace(/\s*[|\-–]\s*(LinkedIn|Wellfound|Greenhouse|Lever|Ashby)\s*$/i, "").trim();
+  const atCompany = unbrandedTitle.match(/^(.+?)\s+at\s+(.+)$/i);
+  return {
+    sourceId: `metadata_${hash(candidate.url).slice(0, 24)}`,
+    title: (atCompany?.[1] || unbrandedTitle).slice(0, 300),
+    company: (atCompany?.[2] || "Unknown company").slice(0, 300),
+    location: candidate.location || "",
+    postedAt: candidate.postedAt || null,
+    description: candidate.description,
+    url: candidate.url,
+    sourceQuery: candidate.sourceQuery,
+    sourceProvider: candidate.sourceProvider,
+    raw: {
+      ...(candidate.raw || {}),
+      discoveryMetadataOnly: true,
+    },
+  };
 }
 
 function normalizePostedTimestamp(value) {
@@ -143,15 +183,22 @@ async function discover({ runId, trigger, slot = "morning", discoveryUrls = [] }
   const serpQueries = trigger === "manual"
     ? []
     : slot === "evening" ? plan.serpQueries.slice(queryHalf) : plan.serpQueries.slice(0, queryHalf);
+  const braveHalf = Math.ceil(plan.braveQueries.length / 2);
   const braveQueries = trigger === "manual"
     ? []
-    : slot === "evening" ? plan.braveQueries.slice(3, 6) : plan.braveQueries.slice(0, 3);
+    : slot === "evening" ? plan.braveQueries.slice(braveHalf) : plan.braveQueries.slice(0, braveHalf);
   const usage = await getUsageSummary();
   const serpRemaining = Math.max(0, 250 - (usage.byProvider.serpapi?.requests || 0));
   const serpSettled = await Promise.allSettled(serpQueries.slice(0, serpRemaining).map((query) => searchSerpApiJobs(query, { runId })));
-  const knownCompanies = trigger === "manual" ? [] : (await listCompanies(20)).slice(0, 2).map((company) => company.name);
-  const watchlistQueries = trigger === "manual" ? [] : [...new Set([...rotatingWatchlistCompanies(new Date(), 2), ...knownCompanies])]
-    .map((company) => `"${company}" (AI OR data OR analytics OR strategy OR product) (jobs OR careers)`);
+  const companyRecords = trigger === "manual" ? [] : await listCompanies(100);
+  const seededCompanies = rotatingWatchlistCompanies(new Date(), 2).map((name) => ({ name, domain: "" }));
+  const rotatedCompanies = rotateItems(companyRecords, 2, `${new Date().toISOString().slice(0, 10)}:${slot}`);
+  const watchlistTargets = [...seededCompanies, ...rotatedCompanies]
+    .filter((company, index, values) => values.findIndex((item) => item.name === company.name) === index);
+  const watchlistQueries = trigger === "manual" ? [] : watchlistTargets.map((company) => {
+    const directDomain = company.domain ? ` OR site:${company.domain}` : "";
+    return `"${company.name}" (AI OR data OR analytics OR strategy OR product) (jobs OR careers) (site:boards.greenhouse.io OR site:job-boards.greenhouse.io OR site:jobs.lever.co OR site:jobs.ashbyhq.com OR site:myworkdayjobs.com OR site:jobs.smartrecruiters.com OR site:linkedin.com/jobs/view${directDomain})`;
+  });
   const weeklyBackfill = trigger !== "manual" && slot === "morning" && new Date().getUTCDay() === 0
     ? plan.serpQueries.slice(0, 4).map((query) => `${query.query} (jobs OR careers)`)
     : [];
@@ -179,7 +226,13 @@ async function discover({ runId, trigger, slot = "morning", discoveryUrls = [] }
       backfillSettled.push({ status: "rejected", reason });
     }
   }
-  const atsConfigured = await fetchConfiguredAtsJobs();
+  const [atsConfigured, atsKnownCompanies] = await Promise.all([
+    fetchConfiguredAtsJobs(),
+    fetchKnownCompanyAtsJobs(companyRecords, {
+      limit: 8,
+      rotationKey: `${new Date().toISOString().slice(0, 10)}:${slot}`,
+    }),
+  ]);
 
   const serpJobs = serpSettled.flatMap((result) => result.status === "fulfilled" ? result.value.jobs : []);
   const braveResults = [...braveSettled, ...watchlistSettled, ...backfillSettled]
@@ -206,10 +259,18 @@ async function discover({ runId, trigger, slot = "morning", discoveryUrls = [] }
     return titleMatch.eligible || !candidate.title || /\b(job|jobs|career|careers)\b/i.test(candidate.title);
   });
   const validated = await validateDiscoveryCandidates(validationCandidates);
-  const jobs = uniqueJobs([...serpJobs, ...atsConfigured.jobs, ...validated.jobs]);
+  const metadataFallbackJobs = validationCandidates.map(metadataCandidateJob).filter(Boolean);
+  const jobs = uniqueJobs([
+    ...serpJobs,
+    ...atsConfigured.jobs,
+    ...atsKnownCompanies.jobs,
+    ...validated.jobs,
+    ...metadataFallbackJobs,
+  ]);
   const rawLeads = [
     ...serpJobs.map((job) => ({ ...job, status: "extracted" })),
     ...atsConfigured.jobs.map((job) => ({ ...job, status: "extracted" })),
+    ...atsKnownCompanies.jobs.map((job) => ({ ...job, status: "extracted" })),
     ...browserCandidates.map((candidate) => {
       const ontology = classifyCandidateTitle(candidate.title);
       return {
@@ -233,7 +294,10 @@ async function discover({ runId, trigger, slot = "morning", discoveryUrls = [] }
         completed: [...braveSettled, ...watchlistSettled, ...backfillSettled].filter((item) => item.status === "fulfilled").length,
         weeklyBackfill: weeklyBackfill.length,
       },
-      ats: atsConfigured.provider,
+      ats: {
+        configured: atsConfigured.provider,
+        knownCompanies: atsKnownCompanies.provider,
+      },
       validation: validated.provider,
     },
   };
@@ -250,11 +314,12 @@ async function normalizeAndPersist(jobs) {
       ? ontology.familyId
       : title.familyId;
     const contentHash = hash(job.title, job.company, job.location || "", job.description);
-    const existing = await getJob(job.sourceId);
+    const existing = await getJob(job.sourceId) || await getJobByCanonicalUrl(job.url);
     const unchanged = existing?.contentHash === contentHash;
     const record = await upsertJob({
       ...existing,
       ...job,
+      sourceId: existing?.sourceId || job.sourceId,
       canonicalUrl: job.url,
       normalizedTitle: title.normalizedTitle,
       contentHash,
@@ -295,12 +360,18 @@ async function normalizeAndPersist(jobs) {
       matchedPatternId: title.matchedPatternId,
       discoverySource: job.sourceProvider,
     });
-    await upsertCompany({
-      name: record.company,
-      atsProvider: job.raw?.ats?.provider || "",
-      atsIdentifier: job.raw?.ats?.boardToken || job.raw?.ats?.company || job.raw?.ats?.tenant || "",
-      metadata: { lastDiscoverySource: job.sourceProvider },
-    });
+    if (record.company && record.company !== "Unknown company") {
+      await upsertCompany({
+        name: record.company,
+        domain: sourceDomain(job.url, job.sourceProvider),
+        atsProvider: job.raw?.ats?.provider || "",
+        atsIdentifier: job.raw?.ats?.boardToken || job.raw?.ats?.company || job.raw?.ats?.tenant || "",
+        metadata: {
+          lastDiscoverySource: job.sourceProvider,
+          ...(job.raw?.ats ? { atsDescriptor: job.raw.ats } : {}),
+        },
+      });
+    }
     if (!unchanged || ["triage_pending", "error"].includes(existing?.status)) persisted.push(record);
   }
   return persisted;

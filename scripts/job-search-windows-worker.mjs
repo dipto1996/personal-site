@@ -30,6 +30,7 @@ const modelName = process.env.JOBSEARCH_LOCAL_LLM_MODEL || "Qwen3-4B-Q4_K_M";
 const modelPath = process.env.JOBSEARCH_LOCAL_MODEL_PATH || "";
 const llamaServerPath = process.env.JOBSEARCH_LLAMA_SERVER_PATH || "";
 const modelBaseUrl = String(process.env.JOBSEARCH_LOCAL_LLM_BASE_URL || "http://127.0.0.1:8080/v1").replace(/\/$/, "");
+const gpuLayers = Math.max(0, Math.min(99, Number(process.env.JOBSEARCH_LOCAL_GPU_LAYERS || 24) || 24));
 const runtimeDir = process.env.JOBSEARCH_WORKER_RUNTIME_DIR || path.join(process.env.LOCALAPPDATA || os.homedir(), "DiptopalJobWorker");
 const logDir = path.join(runtimeDir, "logs");
 
@@ -96,7 +97,7 @@ async function startModel() {
       "--ctx-size", String(WORKER_LIMITS.contextTokens),
       "--parallel", String(WORKER_LIMITS.concurrency),
       "--threads", "6",
-      "--n-gpu-layers", "99",
+      "--n-gpu-layers", String(gpuLayers),
       "--no-webui",
     ], {
       windowsHide: true,
@@ -107,7 +108,7 @@ async function startModel() {
   }
   modelProcess.once("exit", () => { modelProcess = null; });
   lowerProcessPriority(modelProcess.pid);
-  log("model_starting", { pid: modelProcess.pid, resources: evaluation.summary });
+  log("model_starting", { pid: modelProcess.pid, gpuLayers, resources: evaluation.summary });
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if (await modelHealth()) {

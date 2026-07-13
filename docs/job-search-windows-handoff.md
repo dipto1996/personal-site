@@ -49,14 +49,14 @@ The counts are a point-in-time snapshot and can increase as discovery continues.
 
 Inspect Windows RAM, CPU, GPU, and VRAM before downloading a model.
 
-- Use Qwen3-4B Q4_K_M with a 4K context for a 16 GB CPU or integrated-GPU machine.
-- Prefer Qwen3-8B Q4_K_M with a 4K context when an NVIDIA GPU has sufficient VRAM.
+- Use Qwen3-4B Q4_K_M with an 8K context for this measured 16 GB / 6 GB VRAM host.
+- Offload 24 layers to the NVIDIA GPU; keep the remainder on CPU to preserve driver and desktop headroom.
 - Do not use a local model on an 8 GB machine.
 - Never select or download a larger model automatically.
 
 Runtime guardrails:
 
-- Context: 4096 tokens maximum
+- Context: 8192 tokens maximum
 - Concurrency: 1
 - Low process priority
 - Explicit input and output token limits per pass

@@ -18,7 +18,7 @@ Updated: 2026-07-13
 - Disk: 475.78 GiB `C:` volume; 135.21 GiB free at initial inspection
 
 Qwen3-8B Q4_K_M would leave inadequate headroom in 6 GiB VRAM and 16 GiB system RAM. The selected tier
-is Qwen3-4B Q4_K_M with context 4096 and concurrency 1. Qwen3-14B is explicitly rejected in both the
+is Qwen3-4B Q4_K_M with context 8192 and concurrency 1. Qwen3-14B is explicitly rejected in both the
 resource guard and installer.
 
 ## Installed local runtime
@@ -62,14 +62,17 @@ and 0-100 scores must be coherent. One bounded correction pass is allowed for in
 citations, or score/verdict contradictions; unresolved output fails the lease and is not persisted.
 
 `llama-server` is spawned only after a task is claimed and both memory guards pass. It binds to
-`127.0.0.1`, uses context 4096, concurrency 1, six CPU threads, Vulkan GPU offload, and below-normal process
+`127.0.0.1`, uses context 8192, concurrency 1, six CPU threads, 24 Vulkan GPU layers, and below-normal process
 priority. Only the worker-owned model process is stopped, either after five idle minutes or at worker exit.
 No firewall rule, tunnel, VPN, or public listener is created.
 
 The PowerShell setup stores the production token as a current-user DPAPI-protected credential and registers
 a non-elevated scheduled task only when `-RegisterScheduledTask` is explicitly passed. Separate worker and
-collector scripts share the same token boundary and persistent Chromium profile. Setup was intentionally
-not run because the endpoints and token have not been deployed to production.
+collector scripts share the same token boundary and persistent Chromium profile. The production worker is
+registered under Task Scheduler and the model remains loopback-only.
+
+The GPU-layer limit was reduced from full offload to 24 after live monitoring observed one recoverable GPU
+device-loss event. This trades some latency for display/driver headroom on the 6 GiB GTX 1660 Ti.
 
 ## Preliminary local calibration
 

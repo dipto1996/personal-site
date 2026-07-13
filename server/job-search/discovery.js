@@ -79,7 +79,11 @@ const X_RAY_GROUPS = [
   },
   {
     id: "direct-ats-b",
-    sites: ["site:myworkdayjobs.com", "site:jobs.smartrecruiters.com", "site:apply.workable.com", "site:careers.icims.com"],
+    sites: ["site:myworkdayjobs.com", "site:jobs.smartrecruiters.com", "site:apply.workable.com", "site:careers.icims.com", "site:jobs.jobvite.com", "site:bamboohr.com", "site:breezy.hr"],
+  },
+  {
+    id: "company-career-pages",
+    sites: ["inurl:careers", "inurl:jobs", "inurl:open-positions", "inurl:opportunities"],
   },
 ];
 
@@ -104,20 +108,22 @@ export function buildSearchPlan({ date = new Date(), exploratoryCount = 2 } = {}
     EXPLORATORY_QUERIES[(dayIndex + index) % EXPLORATORY_QUERIES.length]
   ));
   return {
-    version: "metadata-first-2026-07-11.v1",
+    version: "metadata-first-2026-07-13.v2",
     generatedAt: date.toISOString(),
     titleFamilies: TITLE_FAMILIES.map(({ id, label }) => ({ id, label })),
     portals: JOB_PORTALS,
     atsSources: ATS_SOURCES,
     localBrowserQueries: buildLocalBrowserSearchPlan({ date }),
     serpQueries: QUERY_BUNDLES.map((item) => ({ ...item, freshness: "today" })),
-    braveQueries: [
-      ...QUERY_BUNDLES.slice(0, 4).map((item) => ({
-        ...item,
-        query: `${item.query} (site:wellfound.com/jobs OR site:workatastartup.com/jobs OR site:builtin.com/job OR site:jobs.ashbyhq.com)`,
-      })),
-      ...exploratory.map((query, index) => ({ id: `exploratory-${index + 1}`, label: "Exploratory responsibility search", query })),
-    ],
+    braveQueries: buildLocalBrowserSearchPlan({ date }).map((item) => ({
+      ...item,
+      query: `${item.query} (job OR career OR hiring)`,
+    })),
+    exploratoryQueries: exploratory.map((query, index) => ({
+      id: `exploratory-${index + 1}`,
+      label: "Exploratory responsibility search",
+      query,
+    })),
   };
 }
 

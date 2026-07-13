@@ -116,6 +116,8 @@ test("discovery uses eight high-recall Google Jobs bundles without negative term
   assert.match(plan.serpQueries.map((item) => item.query).join("\n"), /Business Manager/);
   assert.doesNotMatch(JSON.stringify(plan), /-\"|NOT backend|NOT software/i);
   assert.equal(plan.localBrowserQueries.length, 8);
+  assert.equal(plan.braveQueries.length, 8);
+  assert.match(plan.braveQueries.map((item) => item.query).join("\n"), /inurl:careers|myworkdayjobs|wellfound/);
   assert.ok(plan.portals.some((portal) => portal.id === "wellfound"));
   assert.ok(plan.portals.some((portal) => portal.id === "yc"));
 });
@@ -196,7 +198,15 @@ test("relative discovery timestamps normalize safely and preserve unreliable raw
 
 test("Windows collector source selection, parsing, and dedupe prefer richer canonical jobs", () => {
   assert.deepEqual(windowsCollector.normalizeCollectorSources("linkedin,google"), ["linkedin", "google"]);
-  assert.deepEqual(windowsCollector.normalizeCollectorSources(""), ["linkedin", "wellfound", "google", "bing"]);
+  assert.deepEqual(windowsCollector.normalizeCollectorSources(""), ["linkedin"]);
+  assert.deepEqual(windowsCollector.normalizeCollectorSources("linkedin,wellfound,google,bing"), ["linkedin", "wellfound", "google", "bing"]);
+
+  const directBingUrl = "https://wellfound.com/jobs/998877-director-ai-strategy";
+  const encodedBingUrl = Buffer.from(directBingUrl).toString("base64url");
+  assert.equal(
+    windowsCollector.canonicalCollectorUrl(`https://www.bing.com/ck/a?u=a1${encodedBingUrl}&ntb=1`),
+    directBingUrl,
+  );
 
   const linkedInHtml = `
     <ul class="jobs-search__results-list">
@@ -216,10 +226,17 @@ test("Windows collector source selection, parsing, and dedupe prefer richer cano
       <div data-test="Location">Remote</div>
       <time>yesterday</time>
     </a>`;
+  const bingHtml = `<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?u=a1${encodedBingUrl}&ntb=1">Director, AI Strategy</a></h2><p>Example Fintech is hiring.</p></li>`;
+  const bingRss = `<?xml version="1.0"?><rss><channel><item><title>Director, AI Strategy</title><link>${directBingUrl}</link><description>Example Fintech is hiring.</description><pubDate>Mon, 13 Jul 2026 12:00:00 GMT</pubDate></item></channel></rss>`;
   const linkedInJobs = windowsCollector.extractLinkedInJobsFromHtml(linkedInHtml, { sourceQuery: "linkedin:sample" });
   const wellfoundJobs = windowsCollector.extractWellfoundJobsFromHtml(wellfoundHtml, { sourceQuery: "wellfound:sample" });
+  const bingJobs = windowsCollector.extractSearchResultsFromHtml(bingHtml, { engine: "bing", sourceQuery: "bing:sample" });
+  const bingRssJobs = windowsCollector.extractBingRssResults(bingRss, { sourceQuery: "bing:rss" });
   assert.equal(linkedInJobs.length, 1);
   assert.equal(wellfoundJobs.length, 1);
+  assert.equal(bingJobs.length, 1);
+  assert.equal(bingRssJobs.length, 1);
+  assert.equal(bingRssJobs[0].sourceProvider, "bing_rss_xray");
   assert.equal(linkedInJobs[0].company, "Example Fintech");
   assert.equal(wellfoundJobs[0].company, "Example Fintech");
 
@@ -581,10 +598,16 @@ test("maximal Windows worker packet fits the 8192 context budget and retains pri
 test("Windows collector launcher quotes paths and status uses the live resource phase", async () => {
   const collectorScript = await readFile(new URL("../scripts/windows/start-job-collector.ps1", import.meta.url), "utf8");
   const statusScript = await readFile(new URL("../scripts/windows/status-job-worker.ps1", import.meta.url), "utf8");
+  const setupScript = await readFile(new URL("../scripts/windows/setup-job-worker.ps1", import.meta.url), "utf8");
+  const startScript = await readFile(new URL("../scripts/windows/start-job-worker.ps1", import.meta.url), "utf8");
+  const workerScript = await readFile(new URL("../scripts/job-search-windows-worker.mjs", import.meta.url), "utf8");
   assert.match(collectorScript, /ConvertTo-ProcessArgument/);
   assert.match(collectorScript, /ConvertTo-ProcessArgument "--chrome=\$\(\$config\.chromePath\)"/);
   assert.match(collectorScript, /ConvertTo-ProcessArgument '--run-label=Scheduled Windows collector'/);
   assert.match(statusScript, /if \(\$process\) \{ @\(\) \} else \{ @\('--startup'\) \}/);
+  assert.match(setupScript, /gpuLayers = 24/);
+  assert.match(startScript, /JOBSEARCH_LOCAL_GPU_LAYERS/);
+  assert.match(workerScript, /JOBSEARCH_LOCAL_GPU_LAYERS \|\| 24/);
 });
 
 test("Windows resource guard permits this model tier and always rejects Qwen3-14B", () => {
@@ -626,6 +649,33 @@ test("ATS detector recognizes Greenhouse, Lever, Ashby, Workday, and SmartRecrui
   assert.equal(ats.detectAtsFromUrl("https://jobs.ashbyhq.com/example/def-456").provider, "ashby");
   assert.equal(ats.detectAtsFromUrl("https://acme.wd1.myworkdayjobs.com/en-US/External/job/New-York/Director_JR123").provider, "workday");
   assert.equal(ats.detectAtsFromUrl("https://jobs.smartrecruiters.com/Acme/744000012345-director-ai").provider, "smartrecruiters");
+});
+
+test("known company career boards are revisited and bounded to target plus exploratory titles", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    assert.match(String(url), /api\.lever\.co\/v0\/postings\/example/);
+    return new Response(JSON.stringify([
+      { id: "target", text: "Director of Analytics", hostedUrl: "https://jobs.lever.co/example/target", descriptionPlain: "Lead analytics strategy.", categories: { location: "Remote" } },
+      { id: "unknown-1", text: "Studio Operations Partner", hostedUrl: "https://jobs.lever.co/example/unknown-1", descriptionPlain: "Run studio operations." },
+      { id: "unknown-2", text: "Customer Education Partner", hostedUrl: "https://jobs.lever.co/example/unknown-2", descriptionPlain: "Build customer education." },
+      { id: "unknown-3", text: "Office Coordinator", hostedUrl: "https://jobs.lever.co/example/unknown-3", descriptionPlain: "Coordinate office work." },
+    ]), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const result = await ats.fetchKnownCompanyAtsJobs([{
+      id: "company-1",
+      name: "Example",
+      atsProvider: "lever",
+      atsIdentifier: "example",
+      metadata: { atsDescriptor: { provider: "lever", company: "example" } },
+    }]);
+    assert.equal(result.provider.status, "live");
+    assert.equal(result.provider.completed, 1);
+    assert.deepEqual(result.jobs.map((job) => job.sourceId), ["lever_target", "lever_unknown-1", "lever_unknown-2"]);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("candidate review queues expose relevant, uncertain, and clear-mismatch jobs while hiding samples", async () => {
@@ -730,6 +780,36 @@ test("discovered companies are retained for future watchlist expansion", async (
   assert.equal(company.name, "Example Fintech");
   assert.equal(company.atsProvider, "greenhouse");
   assert.equal(company.metadata.lastDiscoverySource, "serpapi");
+});
+
+test("canonical job URLs prevent duplicate records when a richer source replaces metadata", async () => {
+  const url = "https://wellfound.com/jobs/998877-director-ai-strategy";
+  const [metadata] = await workflow.persistExtractedJobs([{
+    sourceId: "metadata_wellfound_998877",
+    title: "Director, AI Strategy",
+    company: "Unknown company",
+    location: "",
+    description: "Indexed search evidence for an AI strategy role.",
+    url,
+    sourceProvider: "brave",
+    sourceQuery: "wellfound:xray",
+    raw: { discoveryMetadataOnly: true },
+  }]);
+  const [richer] = await workflow.persistExtractedJobs([{
+    sourceId: "collector_wellfound_998877",
+    title: "Director, AI Strategy",
+    company: "Example Fintech",
+    location: "Remote",
+    description: "Lead enterprise AI strategy and analytics products across financial services.",
+    url,
+    sourceProvider: "wellfound",
+    sourceQuery: "wellfound:role",
+    raw: {},
+  }]);
+  assert.equal(richer.id, metadata.id);
+  assert.equal(richer.sourceId, metadata.sourceId);
+  assert.equal((await repository.listJobs({ view: "all" })).length, 1);
+  assert.equal(richer.company, "Example Fintech");
 });
 
 test("title pattern versions can be rolled back to the previous release", async () => {

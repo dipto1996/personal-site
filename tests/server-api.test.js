@@ -203,6 +203,63 @@ test("Windows worker endpoints require a token and commit triage results idempot
   }
 });
 
+test("worker token can hold and release a bounded calibration cohort", async () => {
+  process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
+  const server = await startServer();
+  const authorization = { authorization: `Bearer ${process.env.JOBSEARCH_WORKER_TOKEN}` };
+
+  try {
+    const repository = await import(pathToFileURL(path.resolve("server/job-search/repository.js")).href);
+    const job = await repository.upsertJob({
+      sourceId: `api_queue_control_${Date.now()}`,
+      canonicalUrl: "https://example.com/jobs/calibration-control",
+      title: "Director, AI Strategy",
+      normalizedTitle: "director ai strategy",
+      company: "Example Fintech",
+      location: "Remote",
+      description: "Lead AI strategy for a financial-services product portfolio.",
+      postedAt: null,
+      sourceProvider: "test",
+      sourceQuery: "fixture",
+      contentHash: `api_queue_control_hash_${Date.now()}`,
+      roleFamilyId: "data_ai_strategy",
+      status: "triaged",
+      details: {
+        triageStatus: "complete",
+        triage: { relevance: "relevant", confidence: 0.9 },
+      },
+    });
+    await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: "api-queue-control-test" });
+
+    const unauthorized = await jsonFetch(server.baseUrl, "/api/job-search/worker/queue/hold", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "worker-hold-unauthorized" }),
+    });
+    assert.equal(unauthorized.response.status, 401);
+
+    const hold = await jsonFetch(server.baseUrl, "/api/job-search/worker/queue/hold", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "worker-hold-authorized" }),
+    });
+    assert.equal(hold.response.status, 200);
+    assert.equal(hold.payload.queueControlAfter.holdNewTasks, true);
+    assert.equal(hold.payload.queueCounts.after.byStatus.held, 1);
+
+    const release = await jsonFetch(server.baseUrl, "/api/job-search/worker/queue/release", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "worker-release-authorized", limit: 1 }),
+    });
+    assert.equal(release.response.status, 200);
+    assert.equal(release.payload.selectedCount, 1);
+    assert.equal(release.payload.selected[0].jobId, job.id);
+  } finally {
+    await server.close();
+  }
+});
+
 test("collector batches stay server-side, idempotent, and respect held local queue state", async () => {
   process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
   const server = await startServer();

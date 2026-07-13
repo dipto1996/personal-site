@@ -347,6 +347,14 @@ async function handleApi(request, response, url) {
     }
 
     const body = await parseBody(request);
+    if (request.method === "POST" && url.pathname === "/api/job-search/worker/queue/hold") {
+      sendJson(response, 200, await holdJobSearchLocalQueue(body));
+      return true;
+    }
+    if (request.method === "POST" && url.pathname === "/api/job-search/worker/queue/release") {
+      sendJson(response, 200, await releaseJobSearchLocalBacklog(body));
+      return true;
+    }
     if (request.method === "POST" && url.pathname === "/api/job-search/worker/claim") {
       sendJson(response, 200, await claimWindowsWorkerTask(body));
       return true;

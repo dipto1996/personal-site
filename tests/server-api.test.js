@@ -275,6 +275,14 @@ test("worker token can hold and release a bounded calibration cohort", async () 
       body: JSON.stringify({ operationKey: "worker-retry-failed-authorized", limit: 10 }),
     });
     assert.deepEqual(replay.payload, retryFailed.payload);
+
+    const resume = await jsonFetch(server.baseUrl, "/api/job-search/worker/queue/resume", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "worker-resume-authorized" }),
+    });
+    assert.equal(resume.response.status, 200);
+    assert.equal(resume.payload.queueControlAfter.holdNewTasks, false);
   } finally {
     await server.close();
   }

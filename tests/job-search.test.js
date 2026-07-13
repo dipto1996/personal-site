@@ -242,6 +242,47 @@ test("Windows collector source selection, parsing, and dedupe prefer richer cano
   assert.match(deduped[0].description, /Longer grounded description/);
 });
 
+test("Windows collector extracts a full JSON-LD job page before submission", () => {
+  const html = `<html><head><script type="application/ld+json">${JSON.stringify({
+    "@type": "JobPosting",
+    title: "Director, AI Strategy",
+    hiringOrganization: { name: "Example Fintech" },
+    description: `<p>Lead enterprise AI strategy, analytics products, and responsible AI governance.</p>${"x".repeat(500)}`,
+    datePosted: "2026-07-13",
+    jobLocation: { address: { addressLocality: "New York", addressRegion: "NY", addressCountry: "US" } },
+    baseSalary: { currency: "USD", value: { minValue: 180000, maxValue: 230000, unitText: "YEAR" } },
+  })}</script></head><body></body></html>`;
+  const job = windowsCollector.extractCollectorJobPage(html, "https://example.com/jobs/ai-strategy", {
+    sourceId: "linkedin_4437322106",
+    title: "AI Strategy",
+    company: "Example",
+    description: "Short search-card snippet.",
+    sourceProvider: "linkedin",
+    sourceQuery: "ai_strategy",
+  });
+  assert.equal(job.sourceId, "linkedin_4437322106");
+  assert.equal(job.title, "Director, AI Strategy");
+  assert.equal(job.company, "Example Fintech");
+  assert.match(job.location, /New York, NY, US/);
+  assert.match(job.description, /Lead enterprise AI strategy/);
+  assert.match(job.description, /USD 180000-230000 YEAR/);
+  assert.equal(job.raw.pageExtraction.jsonLd, true);
+  assert.equal(job.raw.pageExtraction.structuredCompensation, true);
+});
+
+test("pre-deep extraction rejects challenge pages and accepts materially richer job text", () => {
+  const job = {
+    title: "Director, AI Strategy",
+    description: "Lead AI strategy for a financial-services portfolio.",
+  };
+  assert.equal(workflow.isRicherExtractedDescription(job, {
+    description: `Sign in to continue. Join LinkedIn to view this Director AI Strategy role. ${"x".repeat(1000)}`,
+  }), false);
+  assert.equal(workflow.isRicherExtractedDescription(job, {
+    description: `About the role: the Director of AI Strategy will lead the portfolio. Responsibilities include enterprise AI planning. Qualifications include ten years of analytics leadership. ${"x".repeat(1000)}`,
+  }), true);
+});
+
 test("local work queue is idempotent and leases one task at a time", async () => {
   const job = await seedJob({ sourceId: "local_queue" });
   const first = await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: "hash:v1" });
@@ -293,6 +334,12 @@ test("queue hold and controlled release preserve history and only activate the r
       });
       await repository.enqueueLocalTask({ jobId: job.id, taskType: "critic", revision: `critic_${index}` });
     }
+    const pendingTriage = await seedJob({
+      sourceId: "held_collector_triage",
+      status: "local_triage_pending",
+      details: { triageStatus: "pending" },
+    });
+    await repository.enqueueLocalTask({ jobId: pendingTriage.id, taskType: "triage", revision: "collector_triage" });
     const mismatch = await seedJob({
       sourceId: "clear_mismatch_not_promoted",
       status: "triage_rejected",
@@ -319,7 +366,7 @@ test("queue hold and controlled release preserve history and only activate the r
       reason: "windows_migration_precalibration",
     });
     assert.equal(held.queueControlAfter.holdNewTasks, true);
-    assert.equal(held.queueCounts.after.byStatus.held, 22);
+    assert.equal(held.queueCounts.after.byStatus.held, 23);
 
     const release = await workflow.releaseHeldWindowsBacklog({
       operationKey: "release-operation-001",
@@ -327,7 +374,9 @@ test("queue hold and controlled release preserve history and only activate the r
       limit: 20,
     });
     assert.equal(release.selectedCount, 20);
+    assert.equal(release.candidateCounts.triagePending, 1);
     assert.equal(release.queueControlAfter.activeReleaseJobIds.length, 20);
+    assert.equal(release.selected.some((item) => item.sourceId === "held_collector_triage"), true);
     assert.equal(release.selected.some((item) => item.sourceId === "clear_mismatch_not_promoted"), false);
     assert.equal(release.selected.some((item) => item.sourceId === "clear_mismatch_promoted"), true);
 
@@ -335,6 +384,18 @@ test("queue hold and controlled release preserve history and only activate the r
     assert.ok(release.queueControlAfter.activeReleaseJobIds.includes(claim.jobId));
     const status = await repository.getLocalWorkerStatus();
     assert.equal(status.queueControl.holdNewTasks, true);
+
+    const resumed = await workflow.resumeWindowsQueue({
+      operationKey: "resume-operation-001",
+      dryRun: false,
+    });
+    assert.equal(resumed.queueControlAfter.holdNewTasks, false);
+    assert.deepEqual(resumed.queueControlAfter.activeReleaseJobIds, []);
+    const replay = await workflow.resumeWindowsQueue({
+      operationKey: "resume-operation-001",
+      dryRun: false,
+    });
+    assert.deepEqual(replay, resumed);
   } finally {
     delete process.env.JOBSEARCH_LOCAL_WORKER_ENABLED;
   }

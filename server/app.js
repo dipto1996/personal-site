@@ -28,6 +28,7 @@ import {
   holdJobSearchLocalQueue,
   getJobSearchPlan,
   releaseJobSearchLocalBacklog,
+  resumeJobSearchLocalQueue,
   retryFailedJobSearchLocalTasks,
   getJobSearchRun,
   getJobSearchStatus,
@@ -356,6 +357,10 @@ async function handleApi(request, response, url) {
       sendJson(response, 200, await releaseJobSearchLocalBacklog(body));
       return true;
     }
+    if (request.method === "POST" && url.pathname === "/api/job-search/worker/queue/resume") {
+      sendJson(response, 200, await resumeJobSearchLocalQueue(body));
+      return true;
+    }
     if (request.method === "POST" && url.pathname === "/api/job-search/worker/queue/retry-failed") {
       sendJson(response, 200, await retryFailedJobSearchLocalTasks(body));
       return true;
@@ -563,6 +568,13 @@ async function handleApi(request, response, url) {
     requireJobSearchAccess(sessionContext);
     const body = await parseBody(request);
     sendJson(response, 200, await releaseJobSearchLocalBacklog(body));
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/job-search/local-queue/resume") {
+    requireJobSearchAccess(sessionContext);
+    const body = await parseBody(request);
+    sendJson(response, 200, await resumeJobSearchLocalQueue(body));
     return true;
   }
 

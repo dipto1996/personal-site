@@ -14,7 +14,7 @@ import {
   renewLocalTaskLease,
 } from "./repository.js";
 import { buildWorkerPacket, WORKER_LIMITS, WORKER_PROTOCOL_VERSION, workerResultId } from "./worker-contract.js";
-import { applyWindowsWorkerResult, enqueueNextWindowsTask } from "./workflow.js";
+import { applyWindowsWorkerResult, enqueueNextWindowsTask, prepareWindowsDeepJob } from "./workflow.js";
 
 const workerIdSchema = z.string().trim().min(3).max(200).regex(/^[a-z0-9_.:-]+$/i);
 const workerIdentitySchema = z.object({
@@ -99,7 +99,7 @@ export async function claimWindowsWorkerTask(input) {
     await recordWorkerHeartbeat({ ...identity, status: "idle", metadata });
     return { task: null, pollAfterSeconds: 15, protocolVersion: WORKER_PROTOCOL_VERSION };
   }
-  const job = await getJob(task.jobId);
+  let job = await getJob(task.jobId);
   if (!job) {
     await failLocalTask(task.id, "Claimed task references a missing job.", {
       retry: false,
@@ -107,6 +107,19 @@ export async function claimWindowsWorkerTask(input) {
       leaseToken: task.leaseToken,
     });
     throw httpError(409, "Claimed task references a missing job.");
+  }
+  if (task.taskType === "deep") {
+    try {
+      job = await prepareWindowsDeepJob({ jobId: job.id, runId: task.payload?.runId || null });
+    } catch (error) {
+      job = await getJob(task.jobId);
+      await recordWorkerHeartbeat({
+        ...identity,
+        status: "claiming",
+        currentTaskId: task.id,
+        metadata: { ...metadata, taskType: task.taskType, researchStatus: "partial", researchError: String(error.message || error).slice(0, 300) },
+      });
+    }
   }
   const feedbackExamples = await listFeedbackExamples(job.roleFamilyId);
   const packet = buildWorkerPacket({ task, job, feedbackExamples });

@@ -261,6 +261,7 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
   try {
     claim = await workerFetch("claim", {
       method: "POST",
+      timeoutMs: 120_000,
       body: { workerId, version, metadata: { platform: process.platform, architecture: process.arch, model: modelName } },
     });
     consecutiveApiFailures = 0;

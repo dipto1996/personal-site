@@ -14,6 +14,7 @@ import {
   canonicalCollectorUrl,
   dedupeCollectorJobs,
   extractCanonicalApplyUrl,
+  extractCollectorJobPage,
   extractLinkedInJobsFromHtml,
   extractSearchResultsFromHtml,
   extractWellfoundJobsFromHtml,
@@ -122,8 +123,9 @@ async function resolveCanonicalUrl(context, job) {
     await page.waitForTimeout(900);
     const html = await page.content();
     const resolved = extractCanonicalApplyUrl(html, page.url());
+    const extracted = extractCollectorJobPage(html, page.url(), job);
     return {
-      ...job,
+      ...extracted,
       url: canonicalCollectorUrl(resolved || job.url),
       canonicalUrl: canonicalCollectorUrl(resolved || job.url),
     };

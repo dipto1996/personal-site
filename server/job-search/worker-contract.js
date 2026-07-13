@@ -148,13 +148,13 @@ function fitPacketToBudget(packet) {
 export function buildWorkerPacket({ task, job, feedbackExamples = [] }) {
   if (!task?.id || !job?.id) throw new Error("A task and job are required to build a worker packet.");
   const researchEvidence = (job.details?.research?.results || []).map((item) => ({
-    claimType: "web_research",
+    claimType: "web_search_snippet",
     value: item.title || item.description,
     sourceUrl: item.url,
     supportingPassage: item.description,
     sourceDate: item.age || "",
-    confidence: 0.7,
-    evidenceType: "explicit",
+    confidence: 0.65,
+    evidenceType: "inferred",
   }));
   const evidence = uniqueEvidence([
     ...(job.details?.sourceEvidence || []),

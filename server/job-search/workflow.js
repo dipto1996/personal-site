@@ -12,6 +12,7 @@ import {
   providerConfiguration,
   searchBrave,
   searchSerpApiJobs,
+  extractJobPage,
 } from "./providers.js";
 import {
   addSnapshot,
@@ -266,6 +267,7 @@ async function normalizeAndPersist(jobs) {
         sourceMetadata: {
           ...(existing?.details?.sourceMetadata || {}),
           ...(postedTimestamp.postedAtRaw ? { postedAtRaw: postedTimestamp.postedAtRaw } : {}),
+          ...(job.raw?.pageExtraction ? { pageExtraction: job.raw.pageExtraction } : {}),
         },
         titleClassification: {
           ...title,
@@ -373,28 +375,131 @@ async function triageJobs(jobs, runId) {
 }
 
 async function researchJob(job, runId) {
-  const cacheKey = hash("company-role-research-v2", job.company, job.normalizedTitle || job.title);
+  const cacheKey = hash("company-role-research-v3", job.company, job.normalizedTitle || job.title);
   const cached = await readResearchCache(cacheKey);
   if (cached) return cached;
   const queries = [
-    `"${job.company}" (visa sponsorship OR STEM OPT OR work authorization OR H-1B)`,
-    `"${job.company}" "${job.title}" (salary OR compensation OR interview)`,
-    `"${job.company}" (remote worldwide OR remote India OR employer of record OR contractor)`,
-    `"${job.company}" ("${job.title}" OR AI OR data) (recruiter OR "hiring manager" OR "Head of" OR VP)`,
+    `"${job.company}" "${job.title}" (salary OR compensation OR interview process)`,
+    `"${job.company}" (visa sponsorship OR work authorization OR H-1B OR "remote India" OR "remote worldwide" OR recruiter)`,
   ];
   const results = [];
+  const errors = [];
+  const configuredResearchCap = Number(process.env.JOBSEARCH_BRAVE_RESEARCH_STOP_AT_MONTHLY_REQUESTS || 600);
+  const researchCap = Number.isFinite(configuredResearchCap) ? Math.max(0, configuredResearchCap) : 600;
   for (const query of queries) {
-    const response = await braveWithinQuota(query, { runId, freshness: "", count: 6 });
-    results.push(...response.results.map((item) => ({ ...item, query })));
+    const usage = await getUsageSummary();
+    if ((usage.byProvider.brave?.requests || 0) >= researchCap) {
+      errors.push("Brave research reserve reached; remaining facts stay unknown.");
+      break;
+    }
+    try {
+      const response = await braveWithinQuota(query, { runId, freshness: "", count: 6 });
+      if (response.status !== "live") errors.push(`Brave research status: ${response.status}.`);
+      results.push(...response.results.map((item) => ({ ...item, query })));
+    } catch (error) {
+      errors.push(String(error.message || error).slice(0, 300));
+    }
   }
   const limitedResults = results.slice(0, 24);
   const contactCandidates = limitedResults
     .filter((item) => /recruiter|talent|hiring|head of|director|vice president|\bvp\b/i.test(`${item.title} ${item.description}`))
     .slice(0, 6)
     .map((item) => ({ nameOrTitle: item.title, url: item.url, evidence: item.description, source: "brave" }));
-  const research = { company: job.company, collectedAt: new Date().toISOString(), results: limitedResults, contactCandidates };
-  await writeResearchCache({ cacheKey, company: job.company, topic: "job_fit", result: research, ttlDays: 30 });
+  const research = {
+    company: job.company,
+    collectedAt: new Date().toISOString(),
+    status: limitedResults.length ? (errors.length ? "partial" : "complete") : errors.length ? "blocked" : "empty",
+    results: limitedResults,
+    contactCandidates,
+    errors,
+  };
+  if (limitedResults.length) {
+    await writeResearchCache({ cacheKey, company: job.company, topic: "job_fit", result: research, ttlDays: 30 });
+  }
   return research;
+}
+
+function pageExtractionEvidence(job, description) {
+  return {
+    claimType: "job_posting",
+    value: "Extracted source job description",
+    sourceUrl: job.canonicalUrl || "",
+    supportingPassage: description.slice(0, 600),
+    sourceDate: job.postedAt || job.details?.sourceMetadata?.postedAtRaw || "",
+    confidence: 1,
+    evidenceType: "explicit",
+  };
+}
+
+export function isRicherExtractedDescription(job, candidate) {
+  const current = String(job?.description || "").trim();
+  const description = String(candidate?.description || "").trim();
+  if (description.length < Math.max(600, current.length + 300, Math.ceil(current.length * 1.2))) return false;
+  const titleTokens = normalizeTitle(job?.title || "").split(" ").filter((token) => token.length >= 4);
+  const normalizedDescription = normalizeTitle(description);
+  const titleOverlap = titleTokens.filter((token) => normalizedDescription.includes(token)).length;
+  const jobLanguage = /responsibilit|qualification|requirement|experience|about the role|what you.ll do|compensation|salary|benefits/i.test(description);
+  const challengePage = /sign in to continue|join linkedin|verify you are human|unusual traffic|captcha|access denied/i.test(description);
+  return !challengePage && jobLanguage && (titleOverlap >= 1 || !titleTokens.length);
+}
+
+export async function prepareWindowsDeepJob({ jobId, runId = null }) {
+  let job = await getJob(jobId);
+  if (!job) throw new Error(`Job ${jobId} was not found.`);
+
+  const extractionMetadata = job.details?.sourceMetadata?.pageExtraction;
+  if (job.canonicalUrl && (!extractionMetadata || job.description.length < 1200)) {
+    const extracted = await extractJobPage(job.canonicalUrl, { runId });
+    if (isRicherExtractedDescription(job, extracted.job)) {
+      const description = extracted.job.description;
+      const sourceEvidence = [
+        ...(job.details?.sourceEvidence || []).filter((item) => item.claimType !== "job_posting"),
+        pageExtractionEvidence(job, description),
+      ];
+      job = await upsertJob({
+        ...job,
+        description,
+        location: job.location || extracted.job.location || "",
+        contentHash: hash(job.title, job.company, job.location || extracted.job.location || "", description),
+        details: {
+          ...job.details,
+          sourceEvidence,
+          sourceMetadata: {
+            ...(job.details?.sourceMetadata || {}),
+            pageExtraction: {
+              status: extracted.status,
+              descriptionCharacters: description.length,
+              extractedAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+    } else if (!extractionMetadata) {
+      job = await upsertJob({
+        ...job,
+        details: {
+          ...job.details,
+          sourceMetadata: {
+            ...(job.details?.sourceMetadata || {}),
+            pageExtraction: {
+              status: extracted.status,
+              error: extracted.error || "No richer source description was returned.",
+              extractedAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+    }
+  }
+
+  if (!job.details?.research?.collectedAt) {
+    const research = await researchJob(job, runId);
+    job = await upsertJob({
+      ...job,
+      details: { ...job.details, research, contactCandidates: research.contactCandidates || [] },
+    });
+  }
+  return job;
 }
 
 function deepMessages(job, research, examples) {
@@ -1046,6 +1151,7 @@ function interleaveBuckets(...buckets) {
 function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds = [] } = {}) {
   const lookup = buildTaskLookup(tasks);
   const active = new Set(activeReleaseJobIds);
+  const triagePending = [];
   const deepRelevant = [];
   const deepPromoted = [];
   const deepUncertain = [];
@@ -1053,6 +1159,11 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
 
   for (const job of jobs) {
     if (!job || active.has(job.id)) continue;
+    if (job.details?.triageStatus !== "complete") {
+      const task = pendingTaskFor(lookup, job.id, "triage");
+      if (task) triagePending.push({ job, taskType: "triage", task });
+      continue;
+    }
     if (shouldQueueDeepForJob(job)) {
       const candidate = {
         job,
@@ -1073,6 +1184,7 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
     }
   }
 
+  triagePending.sort((left, right) => compareQueueTaskCreatedAt(left.task, right.task));
   deepRelevant.sort((left, right) => compareDeepCandidates(left.job, right.job));
   deepPromoted.sort((left, right) => compareDeepCandidates(left.job, right.job));
   deepUncertain.sort((left, right) => compareDeepCandidates(left.job, right.job));
@@ -1080,11 +1192,12 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
     (right.job.details?.deepEvaluation?.overallScore || 0) - (left.job.details?.deepEvaluation?.overallScore || 0)
   ));
 
-  const ordered = interleaveBuckets(deepRelevant, deepPromoted, deepUncertain, criticReady);
+  const ordered = interleaveBuckets(triagePending, deepRelevant, deepPromoted, deepUncertain, criticReady);
   const selected = ordered.slice(0, limit);
   return {
     counts: {
       totalCandidates: ordered.length,
+      triagePending: triagePending.length,
       deepRelevant: deepRelevant.length,
       deepPromoted: deepPromoted.length,
       deepUncertain: deepUncertain.length,
@@ -1092,6 +1205,35 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
     },
     selected,
   };
+}
+
+export async function resumeWindowsQueue({
+  operationKey = "",
+  dryRun = false,
+  reason = "windows_local_processing_active",
+} = {}) {
+  if (operationKey) {
+    const existing = await getControlOperation("queue_resume", operationKey);
+    if (existing?.result) return existing.result;
+  }
+
+  const queueControlBefore = await getLocalQueueControl();
+  const projected = {
+    ...queueControlBefore,
+    holdNewTasks: false,
+    holdReason: reason,
+    activeReleaseJobIds: [],
+  };
+  const queueControlAfter = dryRun ? projected : await setLocalQueueControl(projected);
+  const result = {
+    ok: true,
+    dryRun,
+    operationKey: operationKey || null,
+    queueControlBefore,
+    queueControlAfter,
+  };
+  if (operationKey) await saveControlOperation("queue_resume", operationKey, { result });
+  return result;
 }
 
 export async function reconcileHeldWindowsQueue({

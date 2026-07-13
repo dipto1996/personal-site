@@ -68,6 +68,88 @@ function descriptionFallback(title, company, snippet) {
   return compact(parts.join(" | "), 4000);
 }
 
+function jobPostingFromJsonLd($) {
+  for (const element of $('script[type="application/ld+json"]').toArray()) {
+    try {
+      const parsed = JSON.parse($(element).text());
+      const queue = Array.isArray(parsed) ? [...parsed] : [parsed];
+      while (queue.length) {
+        const item = queue.shift();
+        if (!item || typeof item !== "object") continue;
+        const type = item["@type"];
+        if (type === "JobPosting" || (Array.isArray(type) && type.includes("JobPosting"))) return item;
+        if (Array.isArray(item["@graph"])) queue.push(...item["@graph"]);
+      }
+    } catch {
+      // Search pages frequently contain unrelated malformed JSON-LD blocks.
+    }
+  }
+  return null;
+}
+
+function structuredLocation(posting) {
+  const locations = Array.isArray(posting?.jobLocation) ? posting.jobLocation : [posting?.jobLocation];
+  return locations.map((entry) => {
+    const address = entry?.address || {};
+    return [address.addressLocality, address.addressRegion, address.addressCountry?.name || address.addressCountry]
+      .filter(Boolean)
+      .join(", ");
+  }).filter(Boolean).join("; ") || posting?.applicantLocationRequirements?.name || "";
+}
+
+function structuredCompensation(posting) {
+  const salary = posting?.baseSalary;
+  if (!salary) return "";
+  const value = salary.value || {};
+  const minimum = value.minValue ?? value.value ?? "";
+  const maximum = value.maxValue ?? "";
+  const amount = maximum && String(maximum) !== String(minimum) ? `${minimum}-${maximum}` : String(minimum || maximum);
+  if (!amount) return "";
+  return `Compensation: ${salary.currency || ""} ${amount} ${value.unitText || ""}`.replace(/\s+/g, " ").trim();
+}
+
+export function extractCollectorJobPage(html, pageUrl, fallback = {}) {
+  const $ = cheerio.load(html);
+  const posting = jobPostingFromJsonLd($);
+  const pageDescription = posting?.description
+    ? stripHtml(posting.description)
+    : normalizeString($(".show-more-less-html__markup, .description__text, .jobs-description__content, .jobs-box__html-content, [data-test='job-description'], article, main").first().text());
+  const compensation = structuredCompensation(posting);
+  const description = compact([pageDescription, compensation].filter(Boolean).join("\n"), 8000)
+    || compact(fallback.description || fallback.snippet || "", 8000);
+  const title = posting?.title
+    || normalizeString($("h1, .top-card-layout__title, .job-details-jobs-unified-top-card__job-title").first().text())
+    || fallback.title;
+  const company = posting?.hiringOrganization?.name
+    || normalizeString($(".topcard__org-name-link, .top-card-layout__card a[data-tracking-control-name*='company'], [data-test='company-name']").first().text())
+    || fallback.company;
+  const location = structuredLocation(posting)
+    || normalizeString($(".topcard__flavor--bullet, .top-card-layout__first-subline, [data-test='job-location']").first().text())
+    || fallback.location;
+  const postedAt = posting?.datePosted || fallback.postedAt || null;
+
+  return normalizeCollectorJob({
+    ...fallback,
+    title,
+    company,
+    location,
+    description,
+    postedAt,
+    url: pageUrl || fallback.url,
+    raw: {
+      ...(fallback.raw || {}),
+      pageExtraction: {
+        jsonLd: Boolean(posting),
+        descriptionCharacters: description.length,
+        structuredCompensation: Boolean(compensation),
+      },
+    },
+  }, {
+    sourceProvider: fallback.sourceProvider || "collector_page",
+    sourceQuery: fallback.sourceQuery || "collector_page",
+  });
+}
+
 export function normalizeCollectorJob(input = {}, { sourceProvider = "collector", sourceQuery = "", resolvedUrl = "" } = {}) {
   const url = canonicalCollectorUrl(resolvedUrl || input.canonicalUrl || input.url || "");
   const normalizedTimestamp = normalizeTimestampInput(input.postedAt || input.postedAtRaw || "");

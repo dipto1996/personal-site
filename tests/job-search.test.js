@@ -473,6 +473,18 @@ test("maximal Windows worker packet fits the 8192 context budget and retains pri
     }],
     unknowns: [],
   }), /Invalid URL|Too small/i);
+  assert.throws(() => extractionPass.schema.parse({
+    claims: Array.from({ length: 7 }, (_, index) => ({
+      claimType: `claim_${index}`,
+      value: "Supported claim",
+      sourceUrl: "https://example.com/jobs/maximal",
+      supportingPassage: "Supported passage.",
+      sourceDate: "2026-07-13",
+      confidence: 0.9,
+      evidenceType: "explicit",
+    })),
+    unknowns: [],
+  }), /Too big|at most 6/i);
 
   const evaluationPass = workerContract.getWorkerPass("deep", "evaluate", packet, {
     extraction: { claims: packet.evidence, unknowns: Array.from({ length: 10 }, (_, index) => `Unknown ${index}`) },

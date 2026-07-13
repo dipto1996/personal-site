@@ -23,24 +23,27 @@ export const WORKER_LIMITS = Object.freeze({
   maxSupportingPassageCharacters: 700,
   maxPacketCharacters: 11500,
   maxPromptCharacters: 14500,
-  maxEvaluationEvidenceItems: 8,
+  maxEvaluationEvidenceItems: 6,
 });
 
 const workerGroundedEvidenceSchema = evidenceSchema.extend({
-  sourceUrl: z.string().url(),
-  supportingPassage: z.string().trim().min(1),
+  claimType: z.string().trim().min(1).max(64),
+  value: z.string().trim().min(1).max(180),
+  sourceUrl: z.string().url().max(500),
+  supportingPassage: z.string().trim().min(1).max(240),
+  sourceDate: z.string().max(40).default(""),
   evidenceType: z.enum(["explicit", "inferred"]),
 });
 
 const workerEvidenceExtractionSchema = z.object({
-  claims: z.array(workerGroundedEvidenceSchema).max(20).default([]),
-  unknowns: z.array(z.string().min(1)).max(10).default([]),
+  claims: z.array(workerGroundedEvidenceSchema).max(6).default([]),
+  unknowns: z.array(z.string().trim().min(1).max(160)).max(6).default([]),
 });
 
 const deepWorkerEvaluationSchema = deepEvaluationSchema.extend({
   verdict: z.enum(["apply", "maybe", "pass"]).describe("apply means pursue; maybe means manual review; pass means reject or skip"),
   overallScore: z.number().int().min(0).max(100).describe("integer attractiveness score from 0 to 100, never a 0-to-5 dimension score"),
-  claims: z.array(workerGroundedEvidenceSchema).max(20).default([]),
+  claims: z.array(workerGroundedEvidenceSchema).max(6).default([]),
 }).superRefine((evaluation, context) => {
   const dimensions = Object.values(evaluation.dimensions || {});
   const averageDimension = dimensions.length
@@ -226,7 +229,7 @@ function extractionMessages(packet) {
     },
     {
       role: "user",
-      content: `Job:\n${JSON.stringify(packet.job, null, 2)}\n\nEvidence:\n${JSON.stringify(packet.evidence, null, 2)}\n\nReturn at most 8 highest-priority claims, favoring eligibility, compensation, and coding/interview evidence. Keep values and verbatim supporting passages concise. Every explicit or inferred claim must include a sourceUrl and a supportingPassage drawn from the supplied material. Do not use model memory.`,
+      content: `Job:\n${JSON.stringify(packet.job, null, 2)}\n\nEvidence:\n${JSON.stringify(packet.evidence, null, 2)}\n\nReturn at most 6 highest-priority claims, favoring eligibility, compensation, and coding/interview evidence. Keep each value under 180 characters and each supporting passage under 240 characters. Every explicit or inferred claim must include a sourceUrl and a supportingPassage drawn from the supplied material. Do not use model memory.`,
     },
   ];
 }

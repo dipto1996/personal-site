@@ -46,7 +46,7 @@ export function assertApprovedWindowsModel(value) {
 }
 
 export function evaluateResourceGuard(inventory, { phase = "task" } = {}) {
-  const minimumAvailable = phase === "startup" ? 6 * GIB : 4 * GIB;
+  const minimumAvailable = phase === "startup" ? 6 * GIB : phase === "runtime" ? 2.5 * GIB : 4 * GIB;
   const reasons = [];
   if ((inventory.memory?.totalBytes || 0) < 14 * GIB) reasons.push("At least 14 GiB total RAM is required.");
   if ((inventory.memory?.availableBytes || 0) < minimumAvailable) {

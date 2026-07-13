@@ -50,7 +50,7 @@ $config | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:WorkerConfi
 
 if ($RegisterScheduledTask -and -not $SkipScheduledTask) {
   $startScript = Join-Path $PSScriptRoot 'start-job-worker.ps1'
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$startScript`""
+  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$startScript`" -Wait"
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
   $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
   Register-ScheduledTask -TaskName $script:WorkerTaskName -Action $action -Trigger $trigger -Settings $settings -Description 'Outbound-only local Qwen3-4B job intelligence worker.' -Force | Out-Null

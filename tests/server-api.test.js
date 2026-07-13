@@ -283,6 +283,18 @@ test("worker token can hold and release a bounded calibration cohort", async () 
     });
     assert.equal(resume.response.status, 200);
     assert.equal(resume.payload.queueControlAfter.holdNewTasks, false);
+
+    await repository.setLocalTaskStatus(releasedTask.id, {
+      status: "failed",
+      lastError: "Recover after normal processing resumed",
+    });
+    const retryAfterResume = await jsonFetch(server.baseUrl, "/api/job-search/worker/queue/retry-failed", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "worker-retry-after-resume", limit: 10 }),
+    });
+    assert.equal(retryAfterResume.payload.selectedCount, 1);
+    assert.equal(retryAfterResume.payload.retriedCount, 1);
   } finally {
     await server.close();
   }

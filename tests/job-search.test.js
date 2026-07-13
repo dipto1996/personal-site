@@ -30,6 +30,7 @@ const workerContract = await import("../server/job-search/worker-contract.js");
 const targetProfile = await import("../server/job-search/profile.js");
 const resourceGuard = await import("../scripts/job-search-windows-resource-guard.mjs");
 const windowsCollector = await import("../server/job-search/windows-collector.js");
+const windowsWorkerRuntime = await import("../server/job-search/windows-worker-runtime.js");
 
 test.beforeEach(async () => {
   await rm(path.join(tempDir, "job-search-intelligence.json"), { force: true });
@@ -598,6 +599,25 @@ test("Windows resource guard permits this model tier and always rejects Qwen3-14
   }, { phase: "startup" });
   assert.equal(evaluation.ok, true);
   assert.equal(evaluation.summary.totalVramMiB, 6144);
+  const runtime = resourceGuard.evaluateResourceGuard({
+    memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 3 * (1024 ** 3) },
+    disk: { freeBytes: 100 * (1024 ** 3) },
+    cpu: { loadPercent: 25 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 2300 },
+  }, { phase: "runtime" });
+  assert.equal(runtime.ok, true);
+});
+
+test("Windows worker circuit breaker distinguishes task output from infrastructure failure", () => {
+  assert.equal(windowsWorkerRuntime.workerFailureCategory(new Error("Windows resource guard blocked task: available RAM")), "resource_pressure");
+  assert.equal(windowsWorkerRuntime.workerFailureCategory(new Error("JSON did not match the triage schema")), "task_output");
+  assert.equal(windowsWorkerRuntime.workerFailureCategory(new Error("Local model returned 503")), "infrastructure");
+  assert.equal(windowsWorkerRuntime.isInfrastructureWorkerFailure(new Error("JSON did not match the triage schema")), false);
+  assert.equal(windowsWorkerRuntime.isInfrastructureWorkerFailure(new Error("Windows resource guard blocked task")), false);
+  assert.equal(windowsWorkerRuntime.isInfrastructureWorkerFailure(new Error("Local model returned 503")), true);
+  assert.equal(windowsWorkerRuntime.isInfrastructureWorkerFailure(new Error("fetch failed: ECONNRESET")), true);
+  assert.equal(windowsWorkerRuntime.shouldRetryWorkerTask({ attempt: 1 }), true);
+  assert.equal(windowsWorkerRuntime.shouldRetryWorkerTask({ attempt: 3 }), false);
 });
 
 test("ATS detector recognizes Greenhouse, Lever, Ashby, Workday, and SmartRecruiters", () => {

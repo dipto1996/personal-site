@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [switch]$Once,
+  [switch]$Wait,
   [ValidateRange(0, 20)][int]$MaxTasks = 0
 )
 
@@ -38,3 +39,8 @@ $process.Id | Set-Content -LiteralPath $script:WorkerPidPath -Encoding ascii
 
 Remove-Item Env:JOBSEARCH_WORKER_TOKEN -ErrorAction SilentlyContinue
 Write-Output "Worker started with PID $($process.Id)."
+if ($Wait) {
+  $process.WaitForExit()
+  Remove-Item -LiteralPath $script:WorkerPidPath -Force -ErrorAction SilentlyContinue
+  if ($process.ExitCode -ne 0) { exit $process.ExitCode }
+}

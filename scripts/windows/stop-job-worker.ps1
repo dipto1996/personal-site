@@ -2,6 +2,9 @@
 param()
 
 . (Join-Path $PSScriptRoot 'job-worker-common.ps1')
+if (Get-ScheduledTask -TaskName $script:WorkerTaskName -ErrorAction SilentlyContinue) {
+  Stop-ScheduledTask -TaskName $script:WorkerTaskName -ErrorAction SilentlyContinue
+}
 $process = Get-WorkerProcess
 if (-not $process) {
   Remove-Item -LiteralPath $script:WorkerPidPath -Force -ErrorAction SilentlyContinue

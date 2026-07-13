@@ -11,6 +11,7 @@ import { z } from "zod";
 import { assertApprovedWindowsModel, assertResourcesSafe } from "./job-search-windows-resource-guard.mjs";
 import { getWorkerPass, getWorkerPasses, WORKER_LIMITS, WORKER_PROTOCOL_VERSION, workerResultId } from "../server/job-search/worker-contract.js";
 import { parseStructuredContent } from "../server/job-search/schemas.js";
+import { shouldRetryWorkerTask, workerFailureCategory } from "../server/job-search/windows-worker-runtime.js";
 
 const args = new Set(process.argv.slice(2));
 const valueArg = (name, fallback) => {
@@ -144,7 +145,7 @@ async function callLocalPass(pass) {
       : message
   ));
   const usage = { inputTokens: 0, outputTokens: 0, repairAttempts: 0 };
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     const response = await fetch(`${modelBaseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -170,7 +171,7 @@ async function callLocalPass(pass) {
       lastModelUseAt = Date.now();
       return { result, usage };
     } catch (error) {
-      if (attempt === 1) throw error;
+      if (attempt === 2) throw error;
       usage.repairAttempts += 1;
       const issues = Array.isArray(error.issues)
         ? error.issues.slice(0, 8).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")
@@ -283,7 +284,7 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
   processed += 1;
   const stopHeartbeat = startHeartbeat(task, () => ({ processed, completed, failed }));
   try {
-    await assertResourcesSafe({ phase: "task" });
+    await assertResourcesSafe({ phase: await modelHealth() ? "runtime" : "task" });
     await startModel();
     const evaluation = await evaluateTask(task, claim.packet);
     const resultId = workerResultId(task.taskKey, evaluation.output);
@@ -297,7 +298,14 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
     log("task_completed", { taskId: task.id, taskType: task.taskType, processed, completed, failed });
   } catch (error) {
     failed += 1;
-    consecutiveModelFailures += 1;
+    const failureCategory = workerFailureCategory(error);
+    const infrastructureFailure = failureCategory === "infrastructure";
+    consecutiveModelFailures = infrastructureFailure ? consecutiveModelFailures + 1 : 0;
+    const retry = shouldRetryWorkerTask(task);
+    if (failureCategory === "resource_pressure") {
+      await stopModel("resource_pressure");
+      await sleep(15_000);
+    }
     await workerFetch("failure", {
       method: "POST",
       body: {
@@ -306,11 +314,18 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
         taskId: task.id,
         leaseToken: task.leaseToken,
         error: String(error.message || error).slice(0, 1000),
-        retry: consecutiveModelFailures < 3,
+        retry,
       },
     }).catch(() => null);
-    log("task_failed", { taskId: task.id, taskType: task.taskType, error: String(error.message || error).slice(0, 500), consecutiveModelFailures });
-    if (consecutiveModelFailures >= 3) {
+    log("task_failed", {
+      taskId: task.id,
+      taskType: task.taskType,
+      error: String(error.message || error).slice(0, 500),
+      failureCategory,
+      retry,
+      consecutiveModelFailures,
+    });
+    if (infrastructureFailure && consecutiveModelFailures >= 3) {
       log("circuit_breaker_open", { failed });
       stopping = true;
     }

@@ -1409,7 +1409,8 @@ export async function retryFailedWindowsTasks({
   ]);
   const activeJobIds = new Set(queueControl.activeReleaseJobIds);
   const selected = tasks
-    .filter((task) => activeJobIds.has(task.jobId) && ["deep", "critic", "outreach"].includes(task.taskType))
+    .filter((task) => (!queueControl.holdNewTasks || activeJobIds.has(task.jobId))
+      && ["triage", "deep", "critic", "outreach"].includes(task.taskType))
     .slice(0, boundedLimit);
 
   let retried = [];

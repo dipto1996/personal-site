@@ -255,10 +255,30 @@ async function waitForWorkerApi() {
   throw new Error("Worker stopped before the control plane became available.");
 }
 
+async function resourcesReadyBeforeClaim() {
+  const modelRunning = await modelHealth();
+  try {
+    await assertResourcesSafe({ phase: modelRunning ? "runtime" : "startup" });
+    return true;
+  } catch (error) {
+    const category = workerFailureCategory(error);
+    if (category !== "resource_pressure") throw error;
+    if (modelRunning || modelProcess) await stopModel("resource_wait_before_claim");
+    log("resource_wait_before_claim", { error: String(error.message || error).slice(0, 500), retryInSeconds: 30 });
+    await workerFetch("heartbeat", {
+      method: "POST",
+      body: { workerId, version, status: "resource_waiting", metadata: { processed, completed, failed } },
+    }).catch(() => null);
+    await sleep(30_000);
+    return false;
+  }
+}
+
 await waitForWorkerApi();
 log("worker_started", { workerId, endpoint, model: modelName, context: WORKER_LIMITS.contextTokens, concurrency: WORKER_LIMITS.concurrency });
 
 while (!stopping && (!maxTasks || processed < maxTasks)) {
+  if (!await resourcesReadyBeforeClaim()) continue;
   let claim;
   try {
     claim = await workerFetch("claim", {

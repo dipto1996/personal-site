@@ -608,6 +608,8 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(setupScript, /gpuLayers = 24/);
   assert.match(startScript, /JOBSEARCH_LOCAL_GPU_LAYERS/);
   assert.match(workerScript, /JOBSEARCH_LOCAL_GPU_LAYERS \|\| 24/);
+  assert.match(workerScript, /resource_wait_before_claim/);
+  assert.ok(workerScript.indexOf("resourcesReadyBeforeClaim()") < workerScript.indexOf('workerFetch("claim"'));
 });
 
 test("Windows resource guard permits this model tier and always rejects Qwen3-14B", () => {

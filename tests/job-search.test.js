@@ -552,6 +552,22 @@ test("every current deep evaluation, including a hard-blocked pass, receives an 
   assert.ok(task.priority > 110);
 });
 
+test("Windows deep and critic task revisions include the deterministic framework version", () => {
+  const job = {
+    contentHash: "framework-revision-hash",
+    details: { deepEvaluation: { overallScore: 72 } },
+  };
+
+  assert.match(
+    workflow.windowsTaskRevision(job, "deep"),
+    new RegExp(evaluationFramework.EVALUATION_FRAMEWORK_VERSION),
+  );
+  assert.match(
+    workflow.windowsTaskRevision(job, "critic"),
+    new RegExp(evaluationFramework.EVALUATION_FRAMEWORK_VERSION),
+  );
+});
+
 test("a prompt-version change re-triages every prior relevance class", async () => {
   for (const relevance of ["relevant", "uncertain", "irrelevant"]) {
     const job = await seedJob({

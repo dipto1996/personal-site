@@ -1372,14 +1372,14 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
   });
 }
 
-function windowsTaskRevision(job, taskType) {
+export function windowsTaskRevision(job, taskType) {
   const revision = `${job.contentHash}:${PROMPT_VERSION}`;
   return taskType === "critic" && job.details?.deepEvaluation
-    ? `${revision}:windows-critic-v1:${job.details.deepEvaluation.overallScore}`
+    ? `${revision}:${EVALUATION_FRAMEWORK_VERSION}:windows-critic-v2:${job.details.deepEvaluation.overallScore}`
     : taskType === "outreach" && job.details?.deepEvaluation
-      ? `${revision}:windows-outreach-v1:${job.details.deepEvaluation.overallScore}`
+      ? `${revision}:${EVALUATION_FRAMEWORK_VERSION}:windows-outreach-v2:${job.details.deepEvaluation.overallScore}`
       : taskType === "deep"
-        ? `${revision}:windows-deep-grounded-v1`
+        ? `${revision}:${EVALUATION_FRAMEWORK_VERSION}:windows-deep-grounded-v2`
         : `${revision}:windows-${taskType}-v1`;
 }
 

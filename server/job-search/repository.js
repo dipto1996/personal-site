@@ -1327,10 +1327,9 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
     leaseUntil: null, leasedBy: "", leaseToken: "", resultId: "",
     createdAt: timestamp, updatedAt: timestamp, completedAt: null,
   };
-  const downstreamTypes = taskType === "triage" ? ["triage", "deep", "critic", "outreach"]
-    : taskType === "deep" ? ["deep", "critic", "outreach"]
-      : taskType === "critic" ? ["critic", "outreach"]
-        : [taskType];
+  // Only one stage can be actionable for a job. A newer stage revision retires
+  // both stale upstream work and no-longer-valid downstream work.
+  const supersededTypes = ["triage", "deep", "critic", "outreach"];
   const pendingStatuses = new Set(["queued", "retry", "held"]);
   if (!hasDatabase()) {
     return mutateLocal((db) => {
@@ -1349,7 +1348,7 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
         current = record;
       }
       db.localTasks.forEach((task) => {
-        if (task.id === current.id || task.jobId !== jobId || !downstreamTypes.includes(task.taskType) || !pendingStatuses.has(task.status)) return;
+        if (task.id === current.id || task.jobId !== jobId || !supersededTypes.includes(task.taskType) || !pendingStatuses.has(task.status)) return;
         Object.assign(task, {
           status: "superseded",
           completedAt: timestamp,
@@ -1393,7 +1392,7 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
     last_error=${`Superseded by ${row.id}.`}
     WHERE job_id=${jobId}
       AND id<>${row.id}
-      AND task_type = ANY(${downstreamTypes})
+      AND task_type = ANY(${supersededTypes})
       AND status = ANY(${[...pendingStatuses]})`;
   return row;
 }

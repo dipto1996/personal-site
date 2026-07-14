@@ -177,8 +177,9 @@ export function buildWorkerPacket({ task, job, feedbackExamples = [] }) {
       description: compactString(job.description, WORKER_LIMITS.maxDescriptionCharacters),
       postedAt: job.postedAt || null,
       roleFamilyId: job.roleFamilyId || "exploratory",
-      triage: job.details?.triage || null,
-      deepEvaluation: job.details?.deepEvaluation || null,
+      ...(["critic", "outreach"].includes(task.taskType)
+        ? { deepEvaluation: job.details?.deepEvaluation || null }
+        : {}),
     },
     evidence,
     feedbackExamples: feedbackExamples.slice(0, 6).map((item) => ({

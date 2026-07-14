@@ -792,6 +792,40 @@ test("Windows worker contract bounds evidence and requires grounded claims", asy
   }), /Invalid URL|Too small/i);
 });
 
+test("Windows triage and deep packets exclude stale verdicts while critic receives the primary evaluation", () => {
+  const job = {
+    id: "job_packet_isolation",
+    sourceId: "packet_isolation",
+    title: "Senior Analytics Manager",
+    company: "Example",
+    location: "New York, NY",
+    canonicalUrl: "https://example.com/jobs/packet-isolation",
+    description: "Lead analytics, experimentation, and product measurement.",
+    postedAt: null,
+    roleFamilyId: "analytics_leadership",
+    details: {
+      triage: { relevance: "irrelevant", scopeSummary: "STALE TRIAGE VERDICT" },
+      deepEvaluation: { verdict: "pass", summary: "STALE DEEP VERDICT" },
+    },
+  };
+  const task = (taskType) => ({
+    id: `task_packet_${taskType}`,
+    taskKey: `${taskType}:packet-isolation`,
+    taskType,
+    attempts: 1,
+    leaseUntil: "2026-07-14T18:00:00.000Z",
+  });
+  const triagePacket = workerContract.buildWorkerPacket({ task: task("triage"), job });
+  const deepPacket = workerContract.buildWorkerPacket({ task: task("deep"), job });
+  const criticPacket = workerContract.buildWorkerPacket({ task: task("critic"), job });
+
+  assert.equal(JSON.stringify(triagePacket).includes("STALE TRIAGE VERDICT"), false);
+  assert.equal(JSON.stringify(triagePacket).includes("STALE DEEP VERDICT"), false);
+  assert.equal(JSON.stringify(deepPacket).includes("STALE TRIAGE VERDICT"), false);
+  assert.equal(JSON.stringify(deepPacket).includes("STALE DEEP VERDICT"), false);
+  assert.equal(criticPacket.job.deepEvaluation.summary, "STALE DEEP VERDICT");
+});
+
 test("maximal Windows worker packet fits the 8192 context budget and retains priority evidence", () => {
   const priorityEvidence = [
     {

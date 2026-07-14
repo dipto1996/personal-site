@@ -9,7 +9,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { assertApprovedWindowsModel, assertResourcesSafe } from "./job-search-windows-resource-guard.mjs";
-import { getWorkerPass, getWorkerPasses, WORKER_LIMITS, WORKER_PROTOCOL_VERSION, workerResultId } from "../server/job-search/worker-contract.js";
+import { getWorkerPass, getWorkerPasses, REQUIRED_WORKER_VERSION, WORKER_LIMITS, workerResultId } from "../server/job-search/worker-contract.js";
 import { parseStructuredContent } from "../server/job-search/schemas.js";
 import { shouldRetryWorkerTask, workerFailureCategory } from "../server/job-search/windows-worker-runtime.js";
 
@@ -25,7 +25,7 @@ const pollMs = Math.max(5_000, Number(valueArg("--poll-ms", "15000")) || 15_000)
 const endpoint = String(process.env.JOBSEARCH_WORKER_BASE_URL || "").replace(/\/$/, "");
 const token = String(process.env.JOBSEARCH_WORKER_TOKEN || "");
 const workerId = String(process.env.JOBSEARCH_WORKER_ID || `${os.hostname().toLowerCase()}:${process.pid}`).replace(/[^a-z0-9_.:-]/gi, "-");
-const version = `windows-qwen-worker-${WORKER_PROTOCOL_VERSION}`;
+const version = REQUIRED_WORKER_VERSION;
 const modelName = process.env.JOBSEARCH_LOCAL_LLM_MODEL || "Qwen3-4B-Q4_K_M";
 const modelPath = process.env.JOBSEARCH_LOCAL_MODEL_PATH || "";
 const llamaServerPath = process.env.JOBSEARCH_LLAMA_SERVER_PATH || "";

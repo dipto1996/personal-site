@@ -11,7 +11,8 @@ import {
   triageSchema,
 } from "./schemas.js";
 
-export const WORKER_PROTOCOL_VERSION = "job-worker-2026-07-v1";
+export const WORKER_PROTOCOL_VERSION = "job-worker-2026-07-v2";
+export const REQUIRED_WORKER_VERSION = `windows-qwen-worker-${WORKER_PROTOCOL_VERSION}`;
 export const WORKER_LIMITS = Object.freeze({
   contextTokens: 8192,
   concurrency: 1,

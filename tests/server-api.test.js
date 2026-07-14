@@ -131,6 +131,7 @@ test("Windows worker endpoints require a token and commit triage results idempot
 
     const repository = await import(pathToFileURL(path.resolve("server/job-search/repository.js")).href);
     const contract = await import(pathToFileURL(path.resolve("server/job-search/worker-contract.js")).href);
+    const workerVersion = contract.REQUIRED_WORKER_VERSION;
     const job = await repository.upsertJob({
       sourceId: `api_worker_${Date.now()}`,
       canonicalUrl: "https://example.com/jobs/windows-worker",
@@ -152,12 +153,19 @@ test("Windows worker endpoints require a token and commit triage results idempot
     const claim = await jsonFetch(server.baseUrl, "/api/job-search/worker/claim", {
       method: "POST",
       headers: { ...authorization, "content-type": "application/json" },
-      body: JSON.stringify({ workerId: "test-windows-worker", version: "test-v1" }),
+      body: JSON.stringify({ workerId: "test-windows-worker", version: "outdated-worker-v1" }),
     });
-    assert.equal(claim.response.status, 200);
-    assert.equal(claim.payload.task.taskType, "triage");
-    assert.match(claim.payload.task.leaseToken, /^lease_/);
-    assert.equal(JSON.stringify(claim.payload.packet).includes("DATABASE_URL"), false);
+    assert.equal(claim.response.status, 409);
+
+    const compatibleClaim = await jsonFetch(server.baseUrl, "/api/job-search/worker/claim", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ workerId: "test-windows-worker", version: workerVersion }),
+    });
+    assert.equal(compatibleClaim.response.status, 200);
+    assert.equal(compatibleClaim.payload.task.taskType, "triage");
+    assert.match(compatibleClaim.payload.task.leaseToken, /^lease_/);
+    assert.equal(JSON.stringify(compatibleClaim.payload.packet).includes("DATABASE_URL"), false);
 
     const output = {
       triage: {
@@ -171,12 +179,12 @@ test("Windows worker endpoints require a token and commit triage results idempot
         unknowns: ["Compensation"],
       },
     };
-    const resultId = contract.workerResultId(claim.payload.task.taskKey, output);
+    const resultId = contract.workerResultId(compatibleClaim.payload.task.taskKey, output);
     const resultBody = {
       workerId: "test-windows-worker",
-      version: "test-v1",
-      taskId: claim.payload.task.id,
-      leaseToken: claim.payload.task.leaseToken,
+      version: workerVersion,
+      taskId: compatibleClaim.payload.task.id,
+      leaseToken: compatibleClaim.payload.task.leaseToken,
       resultId,
       model: "Qwen3-4B-Q4_K_M",
       output,

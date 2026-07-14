@@ -13,7 +13,13 @@ import {
   recordWorkerHeartbeat,
   renewLocalTaskLease,
 } from "./repository.js";
-import { buildWorkerPacket, WORKER_LIMITS, WORKER_PROTOCOL_VERSION, workerResultId } from "./worker-contract.js";
+import {
+  buildWorkerPacket,
+  REQUIRED_WORKER_VERSION,
+  WORKER_LIMITS,
+  WORKER_PROTOCOL_VERSION,
+  workerResultId,
+} from "./worker-contract.js";
 import { applyWindowsWorkerResult, enqueueNextWindowsTask, prepareWindowsDeepJob } from "./workflow.js";
 
 const workerIdSchema = z.string().trim().min(3).max(200).regex(/^[a-z0-9_.:-]+$/i);
@@ -59,12 +65,19 @@ function sanitizeMetadata(value) {
   return JSON.stringify(output).length <= 4000 ? output : {};
 }
 
+function requireCompatibleWorker(identity) {
+  if (identity.version !== REQUIRED_WORKER_VERSION) {
+    throw httpError(409, `Worker update required. Expected ${REQUIRED_WORKER_VERSION}.`);
+  }
+}
+
 export function getWindowsWorkerHealth() {
   return {
     ok: true,
     protocolVersion: WORKER_PROTOCOL_VERSION,
     leaseSeconds: WORKER_LIMITS.leaseSeconds,
     heartbeatSeconds: WORKER_LIMITS.heartbeatSeconds,
+    requiredWorkerVersion: REQUIRED_WORKER_VERSION,
     contextTokens: WORKER_LIMITS.contextTokens,
     concurrency: WORKER_LIMITS.concurrency,
     paidProvidersEnabled: false,
@@ -88,6 +101,7 @@ export async function getWindowsWorkerQueue() {
 
 export async function claimWindowsWorkerTask(input) {
   const identity = workerIdentitySchema.parse(input || {});
+  requireCompatibleWorker(identity);
   const metadata = sanitizeMetadata(input?.metadata);
   await recordWorkerHeartbeat({
     ...identity,
@@ -145,6 +159,7 @@ export async function claimWindowsWorkerTask(input) {
 
 export async function heartbeatWindowsWorkerTask(input) {
   const identity = workerIdentitySchema.parse(input || {});
+  requireCompatibleWorker(identity);
   const taskId = String(input?.taskId || "").trim();
   let task = null;
   if (taskId) {
@@ -166,6 +181,7 @@ export async function heartbeatWindowsWorkerTask(input) {
 
 export async function completeWindowsWorkerTask(input) {
   const identity = leaseIdentitySchema.parse(input || {});
+  requireCompatibleWorker(identity);
   const task = await getLocalTask(identity.taskId);
   if (!task) throw httpError(404, "Worker task was not found.");
   const computedResultId = workerResultId(task.taskKey, input.output);
@@ -216,6 +232,7 @@ export async function completeWindowsWorkerTask(input) {
 
 export async function failWindowsWorkerTask(input) {
   const identity = leaseIdentitySchema.parse(input || {});
+  requireCompatibleWorker(identity);
   const task = await getLocalTask(identity.taskId);
   if (!task) throw httpError(404, "Worker task was not found.");
   const retry = input.retry !== false && task.attempts < 3;

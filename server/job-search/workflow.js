@@ -1639,6 +1639,86 @@ export async function reconcileHeldWindowsQueue({
   return result;
 }
 
+export async function prepareFreeCloudCalibrationCohort({
+  operationKey = "",
+  dryRun = false,
+  expectedSize = 20,
+  reason = "windows_thermal_cloud_calibration",
+} = {}) {
+  if (operationKey) {
+    const existing = await getControlOperation("cloud_calibration_prepare", operationKey);
+    if (existing?.result) return existing.result;
+  }
+
+  const boundedExpectedSize = Math.max(1, Math.min(50, Number(expectedSize) || 20));
+  const [queueControlBefore, tasksBefore] = await Promise.all([
+    getLocalQueueControl(),
+    listLocalTasks({ limit: 10000 }),
+  ]);
+  const selectedJobIds = [...new Set(queueControlBefore.activeReleaseJobIds)].filter(Boolean);
+  if (selectedJobIds.length !== boundedExpectedSize) {
+    const error = new Error(
+      `Expected ${boundedExpectedSize} active calibration jobs, but found ${selectedJobIds.length}.`,
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const jobs = await jobsForIds(selectedJobIds);
+  if (jobs.length !== selectedJobIds.length) {
+    const error = new Error("One or more active calibration jobs no longer exist.");
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const selectedSet = new Set(selectedJobIds);
+  const actionableTasks = tasksBefore.filter((task) => (
+    selectedSet.has(task.jobId) && ["queued", "retry", "processing"].includes(task.status)
+  ));
+  const projectedControl = {
+    ...queueControlBefore,
+    holdNewTasks: true,
+    holdReason: reason,
+    activeReleaseJobIds: [],
+  };
+
+  let queueControlAfter = projectedControl;
+  let heldTasks = actionableTasks;
+  if (!dryRun) {
+    heldTasks = [];
+    for (const task of actionableTasks) {
+      const held = await setLocalTaskStatus(task.id, {
+        status: "held",
+        availableAt: new Date().toISOString(),
+        clearLease: true,
+        lastError: `Held: ${reason}`,
+      });
+      if (held) heldTasks.push(held);
+    }
+    queueControlAfter = await setLocalQueueControl(projectedControl);
+  }
+
+  const result = {
+    ok: true,
+    dryRun,
+    operationKey: operationKey || null,
+    reason,
+    expectedSize: boundedExpectedSize,
+    selectedJobIds,
+    selected: jobs.map((job) => ({
+      jobId: job.id,
+      sourceId: job.sourceId,
+      title: job.title,
+      company: job.company,
+    })),
+    heldTaskIds: heldTasks.map((task) => task.id),
+    queueControlBefore,
+    queueControlAfter,
+  };
+  if (operationKey) await saveControlOperation("cloud_calibration_prepare", operationKey, { result });
+  return result;
+}
+
 export async function releaseHeldWindowsBacklog({
   operationKey = "",
   dryRun = false,

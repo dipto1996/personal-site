@@ -806,6 +806,55 @@ test("queue task ordering accepts Neon Date values and local timestamp strings",
   assert.equal(workflow.compareQueueTaskCreatedAt({}, {}), 0);
 });
 
+test("free-cloud calibration freezes exactly the active Windows cohort and revokes an active lease", async () => {
+  process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
+  try {
+    for (let index = 0; index < 20; index += 1) {
+      const job = await seedJob({
+        sourceId: `cloud_calibration_${index}`,
+        canonicalUrl: `https://example.com/jobs/cloud-calibration-${index}`,
+        status: "triage_pending",
+        details: {},
+      });
+      await workflow.enqueueNextWindowsTask(job);
+    }
+    await workflow.reconcileHeldWindowsQueue({
+      operationKey: "cloud-calibration-hold",
+      reason: "calibration_fixture",
+    });
+    const release = await workflow.releaseHeldWindowsBacklog({
+      operationKey: "cloud-calibration-release",
+      limit: 20,
+    });
+    assert.equal(release.selectedCount, 20);
+    const claimed = await repository.claimLocalTask({ workerId: "thermal-fixture-worker" });
+    assert.equal(claimed.status, "processing");
+
+    const prepared = await workflow.prepareFreeCloudCalibrationCohort({
+      operationKey: "cloud-calibration-prepare",
+      expectedSize: 20,
+    });
+    assert.equal(prepared.selectedJobIds.length, 20);
+    assert.equal(prepared.heldTaskIds.length, 20);
+    assert.equal(prepared.queueControlAfter.holdNewTasks, true);
+    assert.deepEqual(prepared.queueControlAfter.activeReleaseJobIds, []);
+
+    const tasks = await repository.listLocalTasks({ limit: 100 });
+    const cohortTasks = tasks.filter((task) => prepared.selectedJobIds.includes(task.jobId));
+    assert.equal(cohortTasks.length, 20);
+    assert.ok(cohortTasks.every((task) => task.status === "held"));
+    assert.equal(cohortTasks.find((task) => task.id === claimed.id)?.leaseToken, "");
+
+    const replay = await workflow.prepareFreeCloudCalibrationCohort({
+      operationKey: "cloud-calibration-prepare",
+      expectedSize: 20,
+    });
+    assert.deepEqual(replay, prepared);
+  } finally {
+    delete process.env.JOBSEARCH_LOCAL_WORKER_ENABLED;
+  }
+});
+
 test("Windows worker contract bounds evidence and requires grounded claims", async () => {
   const job = await seedJob({
     sourceId: "worker_contract",

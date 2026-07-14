@@ -138,6 +138,23 @@ test("job-search evaluation audit is owner-gated and returns a deterministic sam
   }
 });
 
+test("free-cloud calibration start and result endpoints are owner-gated", async () => {
+  const server = await startServer();
+  try {
+    const start = await jsonFetch(server.baseUrl, "/api/job-search/calibration/free-cloud", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "unauthorized-calibration" }),
+    });
+    assert.equal(start.response.status, 401);
+
+    const result = await jsonFetch(server.baseUrl, "/api/job-search/calibration/jsrun_cal_missing");
+    assert.equal(result.response.status, 401);
+  } finally {
+    await server.close();
+  }
+});
+
 test("Windows worker endpoints require a token and commit triage results idempotently", async () => {
   const server = await startServer();
   const token = process.env.JOBSEARCH_WORKER_TOKEN;

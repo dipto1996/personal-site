@@ -1,12 +1,15 @@
+import { createHash } from "node:crypto";
+
 import { buildSearchPlan } from "./job-search/discovery.js";
 import { buildJobCardFacts } from "./job-search/card-facts.js";
 import { EVALUATION_FRAMEWORK_VERSION } from "./job-search/evaluation-framework.js";
 import { buildEvaluationAudit } from "./job-search/evaluation-audit.js";
-import { enqueueJobSearchRun } from "./job-search/inngest.js";
+import { enqueueJobSearchCalibrationRun, enqueueJobSearchRun } from "./job-search/inngest.js";
 import { ownerEmails, TARGET_PROFILE } from "./job-search/profile.js";
 import { getFreeProviderQuotaSummary, providerConfiguration, runFreeProviderCanary } from "./job-search/providers.js";
 import {
   enqueueNextWindowsTask,
+  prepareFreeCloudCalibrationCohort,
   reconcileHeldWindowsQueue,
   releaseHeldWindowsBacklog,
   PROMPT_VERSION,
@@ -233,6 +236,54 @@ export async function getJobSearchEvaluationAudit({ sampleSize = 20, seed } = {}
   await ensureJobSearchRepository();
   const jobs = await listJobs({ view: "all", limit: 5000 });
   return buildEvaluationAudit(jobs, { sampleSize, seed, promptVersion: PROMPT_VERSION });
+}
+
+export async function startJobSearchFreeCloudCalibration(input = {}) {
+  await ensureJobSearchRepository();
+  const operationKey = String(input.operationKey || "").trim();
+  if (!operationKey) {
+    const error = new Error("operationKey is required for an idempotent calibration run.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const prepared = await prepareFreeCloudCalibrationCohort({
+    operationKey,
+    expectedSize: input.expectedSize || 20,
+    reason: "windows_thermal_cloud_calibration",
+  });
+  const digest = createHash("sha256").update(operationKey).digest("hex").slice(0, 24);
+  const run = await createRun({
+    id: `jsrun_cal_${digest}`,
+    trigger: "calibration:free-cloud",
+    status: "queued",
+    phase: "queued",
+  });
+  const queue = await enqueueJobSearchCalibrationRun({
+    runId: run.id,
+    jobIds: prepared.selectedJobIds,
+    operationKey,
+  });
+  return { ok: true, runId: run.id, status: "queued", run, queue, cohort: prepared.selected };
+}
+
+export async function getJobSearchCalibrationResult(runId) {
+  const run = await getRun(runId);
+  if (!run || run.trigger !== "calibration:free-cloud") return null;
+  const jobIds = Array.isArray(run.stats?.cohortJobIds) ? run.stats.cohortJobIds : [];
+  const jobs = [];
+  for (const jobId of jobIds) {
+    const job = await getJob(jobId);
+    if (job) jobs.push(job);
+  }
+  return {
+    run,
+    jobs: jobs.map(publicJob),
+    audit: buildEvaluationAudit(jobs, {
+      sampleSize: jobs.length,
+      seed: run.id,
+      promptVersion: PROMPT_VERSION,
+    }),
+  };
 }
 
 export async function runJobSearchProviderCanary() {

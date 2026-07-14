@@ -99,6 +99,95 @@ async function runDurablePipeline({ step, runId, trigger, slot, discoveryUrls = 
   }));
 }
 
+async function runCalibrationPipeline({ step, runId, jobIds }) {
+  const cohortJobIds = [...new Set((Array.isArray(jobIds) ? jobIds : []).map(String).filter(Boolean))].slice(0, 20);
+  const stats = {
+    cohortJobIds,
+    requested: cohortJobIds.length,
+    triaged: 0,
+    deepEvaluated: 0,
+    criticised: 0,
+    blocked: 0,
+  };
+  if (!cohortJobIds.length) throw new Error("A calibration cohort is required.");
+
+  await step.run("mark-calibration-triage", () => updateRun(runId, {
+    status: "running",
+    phase: "calibration_triage",
+    stats,
+  }));
+  for (const [index, batch] of batches(cohortJobIds, 3).entries()) {
+    const triage = await step.run(`calibration-triage-${index + 1}`, () => runTriageStage({
+      runId,
+      jobIds: batch,
+    }));
+    stats.triaged += triage.triagedCount;
+    await step.run(`record-calibration-triage-progress-${index + 1}`, () => updateRun(runId, {
+      status: "running",
+      phase: "calibration_triage",
+      stats,
+    }));
+  }
+
+  await step.run("mark-calibration-deep", () => updateRun(runId, {
+    status: "running",
+    phase: "calibration_deep_evaluation",
+    stats,
+  }));
+  const deepCompletedJobIds = [];
+  for (const [index, jobId] of cohortJobIds.entries()) {
+    if (index > 0) await step.sleep(`pace-calibration-deep-${index + 1}`, "65s");
+    const deep = await step.run(`calibration-deep-${index + 1}`, () => runDeepStage({
+      runId,
+      jobIds: [jobId],
+      includeBacklog: false,
+    }));
+    stats.deepEvaluated += deep.evaluatedCount;
+    stats.blocked += deep.blockedCount;
+    if (deep.evaluatedCount === 1) deepCompletedJobIds.push(jobId);
+    await step.run(`record-calibration-deep-progress-${index + 1}`, () => updateRun(runId, {
+      status: "running",
+      phase: "calibration_deep_evaluation",
+      stats,
+    }));
+  }
+
+  await step.run("mark-calibration-critic", () => updateRun(runId, {
+    status: "running",
+    phase: "calibration_criticism",
+    stats,
+  }));
+  for (const [index, jobId] of deepCompletedJobIds.entries()) {
+    if (index > 0) await step.sleep(`pace-calibration-critic-${index + 1}`, "20s");
+    const critic = await step.run(`calibration-critic-${index + 1}`, () => runCriticStage({
+      runId,
+      jobIds: [jobId],
+      includeBacklog: false,
+    }));
+    stats.criticised += critic.reviewedCount;
+    stats.blocked += critic.blockedCount;
+    await step.run(`record-calibration-critic-progress-${index + 1}`, () => updateRun(runId, {
+      status: "running",
+      phase: "calibration_criticism",
+      stats,
+    }));
+  }
+
+  const status = stats.deepEvaluated === stats.requested && stats.criticised === stats.requested
+    ? "completed"
+    : "partial";
+  return step.run("complete-calibration", () => updateRun(runId, {
+    status,
+    phase: "complete",
+    stats,
+    providers: { configuration: providerConfiguration(), paidFallbacks: "disabled" },
+    errors: status === "completed" ? [] : [{
+      stage: "models",
+      message: `${stats.blocked} evaluator or critic calls exhausted configured free routes or quotas.`,
+    }],
+  }));
+}
+
 export const requestedJobSearchRun = jobSearchInngest.createFunction(
   {
     id: "requested-job-search-run",
@@ -122,6 +211,30 @@ export const requestedJobSearchRun = jobSearchInngest.createFunction(
     trigger: event.data.trigger || "manual",
     slot: event.data.slot || "morning",
     discoveryUrls: event.data.discoveryUrls || [],
+  }),
+);
+
+export const requestedJobSearchCalibration = jobSearchInngest.createFunction(
+  {
+    id: "requested-job-search-calibration",
+    retries: 2,
+    concurrency: { limit: 1 },
+    triggers: [{ event: "job-search/calibration.requested" }],
+    onFailure: async ({ event, error }) => {
+      const runId = event.data?.event?.data?.runId;
+      if (runId) {
+        await updateRun(runId, {
+          status: "failed",
+          phase: "failed",
+          errors: [{ stage: "calibration", message: error?.message || "Calibration workflow exhausted retries." }],
+        });
+      }
+    },
+  },
+  async ({ event, step }) => runCalibrationPipeline({
+    step,
+    runId: event.data.runId,
+    jobIds: event.data.jobIds,
   }),
 );
 
@@ -155,7 +268,12 @@ function scheduledFunction(id, cron, slot) {
 export const morningJobSearchRun = scheduledFunction("morning-job-search-run", "0 6 * * *", "morning");
 export const eveningJobSearchRun = scheduledFunction("evening-job-search-run", "0 18 * * *", "evening");
 
-export const jobSearchFunctions = [requestedJobSearchRun, morningJobSearchRun, eveningJobSearchRun];
+export const jobSearchFunctions = [
+  requestedJobSearchRun,
+  requestedJobSearchCalibration,
+  morningJobSearchRun,
+  eveningJobSearchRun,
+];
 
 export async function enqueueJobSearchRun({ runId, trigger = "manual", slot = "morning", discoveryUrls = [] }) {
   if (!process.env.INNGEST_EVENT_KEY) {
@@ -172,6 +290,20 @@ export async function enqueueJobSearchRun({ runId, trigger = "manual", slot = "m
   const result = await jobSearchInngest.send({
     name: "job-search/run.requested",
     data: { runId, trigger, slot, discoveryUrls },
+  });
+  return { queued: true, transport: "inngest", eventIds: result.ids || [] };
+}
+
+export async function enqueueJobSearchCalibrationRun({ runId, jobIds, operationKey }) {
+  if (!process.env.INNGEST_EVENT_KEY) {
+    const error = new Error("Inngest is required for durable calibration runs.");
+    error.statusCode = 503;
+    throw error;
+  }
+  const result = await jobSearchInngest.send({
+    id: `calibration-${String(operationKey || runId).replace(/[^a-z0-9_-]+/gi, "-").slice(0, 80)}`,
+    name: "job-search/calibration.requested",
+    data: { runId, jobIds },
   });
   return { queued: true, transport: "inngest", eventIds: result.ids || [] };
 }

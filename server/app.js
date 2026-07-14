@@ -25,6 +25,7 @@ import { getAnalyticsSummary, recordAnalyticsEvent, recordAnalyticsEvents } from
 import { getAppUrl, getRuntimeStatus } from "./config.js";
 import {
   getJobSearchDashboard,
+  getJobSearchCalibrationResult,
   getJobSearchEvaluationAudit,
   holdJobSearchLocalQueue,
   getJobSearchPlan,
@@ -36,6 +37,7 @@ import {
   getJobSearchTaxonomy,
   getJobSearchUsage,
   runJobSearchProviderCanary,
+  startJobSearchFreeCloudCalibration,
   listNegativeFeedbackJobs,
   rerunJobSearchJob,
   requireJobSearchAccess,
@@ -572,6 +574,22 @@ async function handleApi(request, response, url) {
         seed: url.searchParams.get("seed") || undefined,
       }),
     });
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/job-search/calibration/free-cloud") {
+    requireJobSearchAccess(sessionContext);
+    const body = await parseBody(request);
+    sendJson(response, 202, await startJobSearchFreeCloudCalibration(body));
+    return true;
+  }
+
+  const calibrationRunMatch = getRouteMatch(url.pathname, /^\/api\/job-search\/calibration\/([^/]+)$/);
+  if (request.method === "GET" && calibrationRunMatch) {
+    requireJobSearchAccess(sessionContext);
+    const result = await getJobSearchCalibrationResult(decodeURIComponent(calibrationRunMatch[0]));
+    if (!result) sendJson(response, 404, { error: "Calibration run not found." });
+    else sendJson(response, 200, result);
     return true;
   }
 

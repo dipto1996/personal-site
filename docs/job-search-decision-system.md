@@ -34,6 +34,21 @@ Discovery uses eight Google Jobs search shards each day, split across the mornin
 
 There are no negative Google-search terms.
 
+The exact eight Google Jobs queries are below. SerpApi adds `engine=google_jobs`, `location=United States`, and `date_posted:today` to each query.
+
+```text
+1. ("Analytics Manager" OR "Senior Analytics Manager" OR "Director of Analytics" OR "Head of Analytics" OR "Analytics Lead" OR "Business Intelligence Manager") (manager OR director OR head OR lead OR principal OR senior)
+2. ("Data Science Manager" OR "Manager of Data Science" OR "Director of Data Science" OR "Decision Science Manager" OR "Product Scientist") (manager OR director OR head OR lead OR principal OR senior)
+3. ("Product Analytics Manager" OR "Product Analytics Lead" OR "Experimentation Lead" OR "Experimentation Manager" OR "Measurement Lead" OR "Growth Data Science") (manager OR director OR head OR lead OR principal OR senior)
+4. ("Marketing Analytics Manager" OR "Customer Analytics Manager" OR "Commercial Analytics" OR "Customer Insights Lead" OR "Marketing Science Lead" OR "Retention Analytics") (manager OR director OR head OR lead OR principal OR senior)
+5. ("Data Product Manager" OR "Data Products Lead" OR "Analytics Product Manager" OR "Decision Products Lead" OR "Data Strategy Director" OR "data engineering") (manager OR director OR head OR lead OR principal OR senior)
+6. ("Strategy and Analytics" OR "Analytics Strategy" OR "Business Manager" OR "BizOps Analytics" OR "Commercial Strategy Manager" OR "Performance Analytics Manager") (manager OR director OR head OR lead OR principal OR senior)
+7. ("AI Product Manager" OR "AI Product Lead" OR "AI Strategy Lead" OR "AI Operator" OR "AI Enablement Lead" OR "AI Governance Lead") (manager OR director OR head OR lead OR principal OR senior OR operator)
+8. (fintech OR payments OR credit OR banking OR insurance OR lending) ("Analytics Manager" OR "Data Science Manager" OR "Product Analytics" OR "Strategy and Analytics" OR "Data Product") (manager OR director OR head OR lead OR principal OR senior)
+```
+
+Brave/local-browser discovery prepends one rotating source group to each query: LinkedIn + Wellfound + YC, specialist portals, Greenhouse/Lever/Ashby, Workday/SmartRecruiters/Workable/iCIMS/Jobvite/BambooHR/Breezy, or generic company career-page paths. Four rotating exploratory queries cover conversion/lifecycle/retention/acquisition analytics; customer decisioning/marketing science/commercial insights/growth measurement; experimentation/measurement/causal inference; and AI enablement/operating model/data commercialization.
+
 The exact routing formula is:
 
 ```text
@@ -41,6 +56,19 @@ The exact routing formula is:
 OR specialist exception
 OR at least two distinct target functions
 ```
+
+In executable terms:
+
+```text
+leadershipOverride = seniority contains manager|director|head|executive
+  AND function contains analytics|data/decision science|AI/data product|data/AI strategy|data platform/architecture
+excludedPrimaryFunction = engineeringICMatch AND NOT leadershipOverride
+standardMatch = NOT excludedPrimaryFunction AND functionCount > 0 AND seniorityCount > 0
+exploratoryMatch = NOT excludedPrimaryFunction AND distinctFunctionConceptCount >= 2
+eligible = standardMatch OR specialistException OR exploratoryMatch
+```
+
+The nine function concepts are analytics/insights; data/decision science; AI/data product; data/AI strategy; governance/model risk; data platform/architecture; business strategy/operations; AI operator/context; and financial-services decisioning. The seven seniority concepts are manager, director, head, executive, lead, senior IC, and operator. Specialist exceptions are Product Scientist, Decision Scientist, Product Data Scientist, Context Engineer, AI Operator, LLM/AI Evaluator, Business Manager, and Chief of Staff.
 
 The engineering-IC exclusion is applied first, except when eligible management seniority and analytics/science/product/strategy/platform/architecture function evidence create a leadership override.
 
@@ -66,6 +94,27 @@ The server, not the LLM, owns the final gate decision.
 
 Any confirmed blocker produces `pass`. Any unknown gate with no blocker produces `maybe` / review. `apply` is possible only when all four gates are supported and the weighted score is at least 65.
 
+The exact final-decision order is:
+
+```text
+1. Normalize every model dimension to 0-5 or null.
+2. Recompute work authorization, compensation, and coding-interview gates from stored evidence.
+3. Expertise is blocked for an excluded engineering function or model expertiseFit < 2.5.
+4. Expertise is met for model expertiseFit >= 2.5; if absent, an eligible title is an inferred provisional match.
+5. Replace blocked gate dimensions with 0; replace a met-but-unscored gate with 4.
+6. For unknown coding risk only, use archetype suggestion 2 (elevated) or 4 (low); the gate remains unknown.
+7. Weighted score = sum((dimensionScore or neutral 2.5) / 5 * dimensionWeight).
+8. Any blocked gate => pass.
+9. Otherwise any unknown must-have gate => maybe / review.
+10. Otherwise score >= 65 => apply; score < 65 => maybe / review.
+```
+
+Coding-interview classification is applied in this order: explicit coding/SQL/Python/algorithms evidence blocks; explicit no-coding evidence meets; engineering IC blocks by near-certain archetype inference; data/applied/research-scientist IC blocks by near-certain archetype inference; Product/Decision Scientist, data-science management, hands-on technical leadership, and similar roles remain unknown with elevated risk; analytics/strategy/product leadership remains unknown with low inferred risk; everything else remains unknown. Role-specific explicit evidence overrides archetype inference.
+
+Work authorization is applied in this order: explicit job-level prohibition or citizenship/clearance blocks; explicit sponsorship/OPT support meets; exact-company official E-Verify plus H-1B/LCA evidence meets by inference; only one of those employer signals remains unknown; no evidence remains unknown. Job-level restrictions override employer history.
+
+Compensation is parsed from structured source data, grounded claims, the posting, then research. Confirmed maximum below $170,000 blocks; minimum at least $170,000 meets; a range spanning $170,000 is unknown; missing evidence is unknown.
+
 ## Weights
 
 | Dimension | Weight |
@@ -85,7 +134,9 @@ A missing dimension is displayed as `Unknown`. The internal ranking calculation 
 
 ## Every LLM Prompt
 
-Dynamic fields below are enclosed in braces. The Windows worker uses Qwen with JSON-schema-constrained output. Cloud fallbacks use the equivalent prompts and the same schemas.
+Dynamic fields below are enclosed in braces. The Windows worker uses Qwen with JSON-schema-constrained output. Cloud fallbacks use the same schemas.
+
+Every call uses temperature `0.1`. The local server receives `/think` for deep and critic calls, `/no_think` for triage/outreach, prompt caching, a 10-minute timeout, and schema-constrained JSON. Cloud calls have a 90-second timeout and use JSON Schema where supported, otherwise JSON-object mode.
 
 ### 1. Triage
 
@@ -106,6 +157,24 @@ Job: {job}
 
 Use relevance=irrelevant only for a clear primary-function mismatch. Analytics, experimentation, product analytics, marketing/customer analytics, strategy analytics, data-science management, decision science, data products, and cross-functional product-building are core matches in any industry. Do not require AI or financial-services content. A role mentioning Python, SQL, statistics, model building, or engineering partnership is not automatically coding-interview-heavy. Return one triage object using a canonical roleFamilyId.
 ```
+
+The synchronous cloud batch variant has this exact system prompt:
+
+```text
+You are a high-recall career screener. Return compact JSON only. Never reject uncertainty. Classify responsibilities, not keyword overlap. confidence is certainty in the relevance label: use 0.9+ only for clear decisions and 0.4-0.8 for uncertainty, never 0 when reasons are decisive. Keep scopeSummary under 25 words and reasons/unknowns to at most three short items each.
+```
+
+Its user prompt contains the same candidate/profile blocks, then this exact instruction and up to three jobs:
+
+```text
+Evaluate every job. Use relevance=irrelevant only for a clear primary-function mismatch. Analytics, experimentation, product analytics, marketing/customer analytics, strategy analytics, data-science management, decision science, data products, and cross-functional product-building are core matches in any industry. AI, financial services, and remote work are not prerequisites. Python, SQL, statistics, model building, or engineering partnership are not automatically coding-interview-heavy. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.
+
+Jobs: {jobs}
+
+Return {"jobs":[{"sourceId":"...","evaluation":{"roleFamilyId":"...","relevance":"relevant|uncertain|irrelevant","confidence":0.0,"scopeSummary":"...","codingIntensity":"low|medium|high|unknown","seniority":"too_junior|aligned|stretch|unknown","reasons":[],"unknowns":[]}}]}
+```
+
+Only `relevance=irrelevant` with confidence at least `0.90` becomes a clear mismatch. Every other result goes to deep review.
 
 ### 2. Evidence Extraction
 
@@ -204,3 +273,43 @@ Allowed families: ai_product_platform, data_ai_strategy, product_decision_scienc
 ```
 
 The model can propose a literal exact or token-set alias. The server safely compiles it, tests it against every owner-labelled job, and controls promotion or rollback. The model never writes executable regular expressions.
+
+### 7. Provider Canary
+
+This is health checking only and never evaluates a job.
+
+**System**
+
+```text
+Return only valid JSON matching the requested shape.
+```
+
+**User**
+
+```text
+Return {"ok":true,"provider":"{provider}"}.
+```
+
+## Research Logic
+
+Every deep candidate first attempts direct page/JSON-LD extraction. Tavily is used only when direct extraction fails. Brave then runs these exact query templates, subject to the research reserve:
+
+```text
+"{company}" "{cleanTitle}" (salary OR compensation OR "pay range" OR sponsorship OR "work authorization"{interviewTerms})
+"{company}" ("STEM OPT" OR "F-1 OPT" OR "E-Verify" OR H-1B OR LCA) (site:e-verify.gov OR site:dol.gov OR site:uscis.gov OR site:dhs.gov)
+```
+
+For near-certain or elevated archetype risk, `{interviewTerms}` is exactly ` OR "coding interview" OR "live coding" OR "SQL assessment" OR "Python assessment" OR "technical screen" OR "interview process"`; otherwise it is empty. Search snippets are evidence candidates, not facts: final work-authorization inference requires an official source and an exact-company match; role-specific coding research requires both exact-company and exact-role matches.
+
+## Model Routing
+
+Routes are tried in this exact order; a failure or exhausted free quota advances to the next route. Paid routes require paid fallback to be explicitly enabled and must pass the database budget check.
+
+| Stage | Route order |
+|---|---|
+| Triage | local Qwen3-4B no-think; Cloudflare Llama 3.1 8B; Groq GPT-OSS-120B low reasoning; OpenRouter free; GLM-4.7-Flash |
+| Deep | local Qwen3-4B think; Groq GPT-OSS-120B; Cloudflare Llama 3.3 70B; OpenRouter free; paid GLM-5.2 |
+| Critic | local Qwen3-4B think; Cloudflare Llama 3.3 70B; OpenRouter free; Groq GPT-OSS-120B; paid Kimi K2.5 |
+| Utility | local Qwen3-4B no-think; Cloudflare Llama 3.1 8B; Groq GPT-OSS-120B; OpenRouter free; GLM-4.7-Flash |
+
+The Windows worker performs deep evaluation in two separate calls: evidence extraction (maximum 1,800 output tokens) and evaluation (maximum 2,400). Triage is capped at 900, critic at 900, and outreach at 500. The worker runs one job at a time with an 8,192-token context and a 12,000-character job-description cap.

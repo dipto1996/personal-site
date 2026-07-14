@@ -552,10 +552,10 @@ test("every current deep evaluation, including a hard-blocked pass, receives an 
   assert.ok(task.priority > 110);
 });
 
-test("Windows deep and critic task revisions include the deterministic framework version", () => {
+test("Windows task revisions include the framework and fingerprint the complete deep evaluation", () => {
   const job = {
     contentHash: "framework-revision-hash",
-    details: { deepEvaluation: { overallScore: 72 } },
+    details: { deepEvaluation: { verdict: "maybe", overallScore: 72, summary: "Visa evidence is unknown." } },
   };
 
   assert.match(
@@ -566,6 +566,29 @@ test("Windows deep and critic task revisions include the deterministic framework
     workflow.windowsTaskRevision(job, "critic"),
     new RegExp(evaluationFramework.EVALUATION_FRAMEWORK_VERSION),
   );
+  assert.notEqual(
+    workflow.windowsTaskRevision(job, "critic"),
+    workflow.windowsTaskRevision({
+      ...job,
+      details: { deepEvaluation: { ...job.details.deepEvaluation, summary: "Compensation evidence is unknown." } },
+    }, "critic"),
+  );
+});
+
+test("scheduled local enqueuing uses the same versioned task identity as controlled release", async () => {
+  const job = await seedJob({
+    sourceId: "scheduled_revision_identity",
+    details: { triageStatus: "pending" },
+  });
+
+  await workflow.enqueueJobsForLocalProcessing({ runId: "scheduled-revision-run", jobIds: [job.id] });
+  const scheduled = (await repository.listLocalTasks({ limit: 100 }))
+    .find((task) => task.jobId === job.id && task.taskType === "triage");
+  const controlled = await workflow.enqueueNextWindowsTask(job);
+
+  assert.ok(scheduled);
+  assert.equal(controlled.id, scheduled.id);
+  assert.equal(controlled.taskKey, scheduled.taskKey);
 });
 
 test("a prompt-version change re-triages every prior relevance class", async () => {

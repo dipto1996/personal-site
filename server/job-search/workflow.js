@@ -1000,12 +1000,11 @@ export async function enqueueJobsForLocalProcessing({ runId = null, jobIds = [] 
   for (const job of jobs) {
     const taskType = nextLocalTaskType(job);
     if (!taskType) continue;
-    const revision = `${job.contentHash}:${PROMPT_VERSION}`;
     const task = await enqueueLocalTask({
       jobId: job.id,
       taskType,
-      priority: taskType === "triage" ? 100 : taskType === "deep" ? 80 : taskType === "critic" ? 60 : 30,
-      revision: `${revision}:${taskType}`,
+      priority: localTaskPriority(job, taskType),
+      revision: windowsTaskRevision(job, taskType),
       payload: { sourceId: job.sourceId, runId },
     });
     queued.push(task);
@@ -1374,10 +1373,13 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
 
 export function windowsTaskRevision(job, taskType) {
   const revision = `${job.contentHash}:${PROMPT_VERSION}`;
+  const deepEvaluationFingerprint = job.details?.deepEvaluation
+    ? hash(JSON.stringify(job.details.deepEvaluation))
+    : "none";
   return taskType === "critic" && job.details?.deepEvaluation
-    ? `${revision}:${EVALUATION_FRAMEWORK_VERSION}:windows-critic-v2:${job.details.deepEvaluation.overallScore}`
+    ? `${revision}:${EVALUATION_FRAMEWORK_VERSION}:windows-critic-v3:${deepEvaluationFingerprint}`
     : taskType === "outreach" && job.details?.deepEvaluation
-      ? `${revision}:${EVALUATION_FRAMEWORK_VERSION}:windows-outreach-v2:${job.details.deepEvaluation.overallScore}`
+      ? `${revision}:${EVALUATION_FRAMEWORK_VERSION}:windows-outreach-v3:${deepEvaluationFingerprint}`
       : taskType === "deep"
         ? `${revision}:${EVALUATION_FRAMEWORK_VERSION}:windows-deep-grounded-v2`
         : `${revision}:windows-${taskType}-v1`;

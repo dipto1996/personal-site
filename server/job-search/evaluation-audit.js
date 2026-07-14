@@ -57,6 +57,9 @@ export function auditJobEvaluation(job, { promptVersion } = {}) {
     addFinding(findings, "deep_incomplete", "Current deep evaluation is missing.");
     return findings;
   }
+  if (promptVersion && details.deepPromptVersion !== promptVersion) {
+    addFinding(findings, "stale_deep_prompt", "Deep evaluation was not completed with the current prompt version.");
+  }
   if (details.evaluationFrameworkVersion !== EVALUATION_FRAMEWORK_VERSION
       || deep.decision?.frameworkVersion !== EVALUATION_FRAMEWORK_VERSION) {
     addFinding(findings, "stale_evaluation_framework", "Deep evaluation was not finalized with the current deterministic framework.");
@@ -114,6 +117,9 @@ export function auditJobEvaluation(job, { promptVersion } = {}) {
   if (details.criticStatus !== "complete" || !critic) {
     addFinding(findings, "critic_incomplete", "Independent critic evaluation is missing.");
   } else {
+    if (promptVersion && details.criticPromptVersion !== promptVersion) {
+      addFinding(findings, "stale_critic_prompt", "Critic evaluation was not completed with the current prompt version.");
+    }
     const criticAgrees = critic.recommendedVerdict === deep.verdict;
     if (critic.agrees !== criticAgrees) {
       addFinding(findings, "critic_agreement_contradiction", "Critic agrees flag conflicts with its recommended verdict.");
@@ -140,6 +146,11 @@ export function buildEvaluationAudit(jobs, { sampleSize = 20, seed = new Date().
     job.details?.deepStatus === "complete"
       && job.details?.evaluationFrameworkVersion === EVALUATION_FRAMEWORK_VERSION
       && job.details?.criticStatus === "complete"
+      && (!promptVersion || (
+        job.details?.triagePromptVersion === promptVersion
+        && job.details?.deepPromptVersion === promptVersion
+        && job.details?.criticPromptVersion === promptVersion
+      ))
   ));
   const boundedSize = Math.max(1, Math.min(100, Number(sampleSize) || 20));
   const sample = completed

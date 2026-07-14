@@ -512,6 +512,15 @@ async function triageJobs(jobs, runId) {
           triageProvider: response.provider,
           triageModel: response.model,
           triageAttempts: response.attempts || [],
+          deepEvaluation: null,
+          deepStatus: "pending",
+          deepPromptVersion: null,
+          evaluationFrameworkVersion: null,
+          critic: null,
+          criticStatus: "pending",
+          criticPromptVersion: null,
+          modelAgreement: "pending",
+          outreach: null,
         },
       });
       await recordEvaluation({
@@ -725,7 +734,7 @@ async function deepEvaluateJobs(jobs, runId) {
     evaluated.push(await upsertJob({
       ...job, status,
       details: {
-        ...job.details, deepEvaluation: finalized, deepStatus: "complete",
+        ...job.details, deepEvaluation: finalized, deepStatus: "complete", deepPromptVersion: PROMPT_VERSION,
         evaluationFrameworkVersion: EVALUATION_FRAMEWORK_VERSION,
         deepProvider: response.provider, deepModel: response.model, deepAttempts: response.attempts || [], research, claims,
         contactCandidates: research.contactCandidates || [],
@@ -792,6 +801,7 @@ async function criticJobs(jobs, runId) {
         ...job.details,
         critic: response.result,
         criticStatus: "complete",
+        criticPromptVersion: PROMPT_VERSION,
         criticProvider: response.provider,
         criticModel: response.model,
         criticAttempts: response.attempts || [],
@@ -1013,8 +1023,8 @@ export async function runLocalTriageEvaluation({ jobId, runId = null }) {
       triagePromptVersion: PROMPT_VERSION,
       triageProvider: response.provider, triageModel: response.model,
       triageAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
-      deepEvaluation: null, deepStatus: "pending", evaluationFrameworkVersion: null,
-      critic: null, criticStatus: "pending", modelAgreement: "pending", outreach: null,
+      deepEvaluation: null, deepStatus: "pending", deepPromptVersion: null, evaluationFrameworkVersion: null,
+      critic: null, criticStatus: "pending", criticPromptVersion: null, modelAgreement: "pending", outreach: null,
     },
   });
   await recordEvaluation({
@@ -1055,12 +1065,12 @@ export async function runLocalDeepEvaluation({ jobId, runId = null }) {
     ...job,
     status,
     details: {
-      ...job.details, deepEvaluation: finalized, deepStatus: "complete",
+      ...job.details, deepEvaluation: finalized, deepStatus: "complete", deepPromptVersion: PROMPT_VERSION,
       evaluationFrameworkVersion: EVALUATION_FRAMEWORK_VERSION,
       deepProvider: response.provider, deepModel: response.model,
       deepAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
       research, claims, contactCandidates: research.contactCandidates || [],
-      critic: null, criticStatus: "pending", modelAgreement: "pending", outreach: null,
+      critic: null, criticStatus: "pending", criticPromptVersion: null, modelAgreement: "pending", outreach: null,
     },
   });
 }
@@ -1090,7 +1100,7 @@ export async function runLocalCriticEvaluation({ jobId, runId = null }) {
       : primaryVerdict === "apply" && calibration.active ? "shortlisted"
         : primaryVerdict === "pass" ? "passed" : "needs_review",
     details: {
-      ...job.details, critic: response.result, criticStatus: "complete",
+      ...job.details, critic: response.result, criticStatus: "complete", criticPromptVersion: PROMPT_VERSION,
       criticProvider: response.provider, criticModel: response.model,
       criticAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
       modelAgreement: disagreement ? "disagree" : "agree",
@@ -1170,9 +1180,11 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
         triageAttempts: [{ provider: evaluationBase.provider, model, status: "live" }],
         deepEvaluation: null,
         deepStatus: "pending",
+        deepPromptVersion: null,
         evaluationFrameworkVersion: null,
         critic: null,
         criticStatus: "pending",
+        criticPromptVersion: null,
         modelAgreement: "pending",
         outreach: null,
       },
@@ -1202,6 +1214,7 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
         evidenceExtraction: parsed.extraction,
         deepEvaluation: result,
         deepStatus: "complete",
+        deepPromptVersion: PROMPT_VERSION,
         evaluationFrameworkVersion: EVALUATION_FRAMEWORK_VERSION,
         deepProvider: evaluationBase.provider,
         deepModel: model,
@@ -1209,6 +1222,7 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
         claims,
         critic: null,
         criticStatus: "pending",
+        criticPromptVersion: null,
         modelAgreement: "pending",
         outreach: null,
       },
@@ -1241,6 +1255,7 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
         ...job.details,
         critic: result,
         criticStatus: "complete",
+        criticPromptVersion: PROMPT_VERSION,
         criticProvider: evaluationBase.provider,
         criticModel: model,
         criticAttempts: [{ provider: evaluationBase.provider, model, status: "live" }],

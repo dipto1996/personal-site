@@ -117,10 +117,12 @@ function auditReadyJob(overrides = {}) {
     triagePromptVersion: workflow.PROMPT_VERSION,
     triage: { relevance: "relevant", confidence: 0.9 },
     deepStatus: "complete",
+    deepPromptVersion: workflow.PROMPT_VERSION,
     evaluationFrameworkVersion: evaluationFramework.EVALUATION_FRAMEWORK_VERSION,
     deepEvaluation,
     claims: [],
     criticStatus: "complete",
+    criticPromptVersion: workflow.PROMPT_VERSION,
     critic: {
       agrees: true,
       recommendedVerdict: deepEvaluation.verdict,
@@ -152,6 +154,8 @@ test("evaluation audit detects stale, contradictory, ungrounded, and biased outp
   const job = auditReadyJob();
   job.status = "passed";
   job.details.triagePromptVersion = "old-prompt";
+  job.details.deepPromptVersion = "old-prompt";
+  job.details.criticPromptVersion = "old-prompt";
   job.details.deepEvaluation.verdict = "pass";
   job.details.deepEvaluation.summary = "This public-sector role does not match because it is outside financial services and lacks remote-from-India flexibility.";
   job.details.deepEvaluation.dimensions.compensation = {
@@ -176,12 +180,19 @@ test("evaluation audit detects stale, contradictory, ungrounded, and biased outp
   };
   const codes = new Set(evaluationAudit.auditJobEvaluation(job, { promptVersion: workflow.PROMPT_VERSION }).map((finding) => finding.code));
   assert.ok(codes.has("stale_triage_prompt"));
+  assert.ok(codes.has("stale_deep_prompt"));
+  assert.ok(codes.has("stale_critic_prompt"));
   assert.ok(codes.has("verdict_gate_contradiction"));
   assert.ok(codes.has("unknown_dimension_scored"));
   assert.ok(codes.has("ungrounded_claim"));
   assert.ok(codes.has("industry_used_as_fit_penalty"));
   assert.ok(codes.has("remote_used_as_fit_penalty"));
   assert.ok(codes.has("critic_agreement_contradiction"));
+  assert.equal(evaluationAudit.buildEvaluationAudit([job], {
+    sampleSize: 20,
+    seed: "stale-audit-seed",
+    promptVersion: workflow.PROMPT_VERSION,
+  }).sample.length, 0);
 });
 
 test("title normalization and all eight seeded families route deterministically", () => {

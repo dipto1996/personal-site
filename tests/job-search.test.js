@@ -850,6 +850,13 @@ test("free-cloud calibration freezes exactly the active Windows cohort and revok
       expectedSize: 20,
     });
     assert.deepEqual(replay, prepared);
+
+    const recovered = await workflow.prepareFreeCloudCalibrationCohort({
+      operationKey: "cloud-calibration-recover",
+      expectedSize: 20,
+    });
+    assert.equal(recovered.recovered, true);
+    assert.deepEqual(recovered.selectedJobIds, prepared.selectedJobIds);
   } finally {
     delete process.env.JOBSEARCH_LOCAL_WORKER_ENABLED;
   }

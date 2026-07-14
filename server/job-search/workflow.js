@@ -1655,7 +1655,12 @@ export async function prepareFreeCloudCalibrationCohort({
     getLocalQueueControl(),
     listLocalTasks({ limit: 10000 }),
   ]);
-  const selectedJobIds = [...new Set(queueControlBefore.activeReleaseJobIds)].filter(Boolean);
+  const activeJobIds = [...new Set(queueControlBefore.activeReleaseJobIds)].filter(Boolean);
+  const recoverableJobIds = [...new Set(tasksBefore
+    .filter((task) => task.status === "held" && task.lastError === `Held: ${reason}`)
+    .map((task) => task.jobId)
+    .filter(Boolean))];
+  const selectedJobIds = activeJobIds.length ? activeJobIds : recoverableJobIds;
   if (selectedJobIds.length !== boundedExpectedSize) {
     const error = new Error(
       `Expected ${boundedExpectedSize} active calibration jobs, but found ${selectedJobIds.length}.`,
@@ -1703,6 +1708,7 @@ export async function prepareFreeCloudCalibrationCohort({
     dryRun,
     operationKey: operationKey || null,
     reason,
+    recovered: activeJobIds.length === 0,
     expectedSize: boundedExpectedSize,
     selectedJobIds,
     selected: jobs.map((job) => ({

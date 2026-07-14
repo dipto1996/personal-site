@@ -596,6 +596,13 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/job-search/local-queue/retry-failed") {
+    requireJobSearchAccess(sessionContext);
+    const body = await parseBody(request);
+    sendJson(response, 200, await retryFailedJobSearchLocalTasks(body));
+    return true;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/job-search/taxonomy") {
     requireJobSearchAccess(sessionContext);
     sendJson(response, 200, { taxonomy: await getJobSearchTaxonomy() });

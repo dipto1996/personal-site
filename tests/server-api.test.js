@@ -485,6 +485,14 @@ test("owner queue hold and release routes are authenticated, idempotent, and dry
     assert.equal(replay.response.status, 200);
     assert.equal(replay.payload.selectedCount, 20);
     assert.equal(replay.payload.queueControlAfter.activeReleaseJobIds.length, 20);
+
+    const retry = await jsonFetch(server.baseUrl, "/api/job-search/local-queue/retry-failed", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ operationKey: "retry-route-001", dryRun: false, limit: 20 }),
+    });
+    assert.equal(retry.response.status, 200);
+    assert.equal(typeof retry.payload.retriedCount, "number");
   } finally {
     delete process.env.JOBSEARCH_ALLOW_ANY_SIGNED_IN;
     delete process.env.JOBSEARCH_LOCAL_WORKER_ENABLED;

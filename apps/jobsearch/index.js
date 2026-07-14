@@ -22,6 +22,18 @@ function statusLabel(value) {
   return String(value || "unknown").replaceAll("_", " ");
 }
 
+const WORKER_HEARTBEAT_STALE_MS = 3 * 60 * 1000;
+
+function workerIsConnected(worker) {
+  const lastSeenAt = new Date(worker?.lastSeenAt || "").getTime();
+  return Number.isFinite(lastSeenAt) && Date.now() - lastSeenAt <= WORKER_HEARTBEAT_STALE_MS;
+}
+
+function workerStatusLabel(worker) {
+  if (!worker) return "not connected";
+  return workerIsConnected(worker) ? statusLabel(worker.status) : "offline";
+}
+
 function safeExternalUrl(value) {
   try {
     const parsed = new URL(String(value || ""));
@@ -99,7 +111,7 @@ function renderRuntime(runtime = {}, localProcessing = {}) {
   const providers = Object.entries(runtime.providers || {}).filter(([name]) => name !== "local");
   const worker = localProcessing.workers?.[0];
   return `<div class="job-runtime-grid">
-    <article class="job-runtime-card"><span>Windows AI worker</span><strong>${worker ? escapeHtml(statusLabel(worker.status)) : "not connected"}</strong></article>
+    <article class="job-runtime-card"><span>Windows AI worker</span><strong>${escapeHtml(workerStatusLabel(worker))}</strong></article>
     ${providers.map(([name, configured]) => `<article class="job-runtime-card"><span>${escapeHtml(name)}</span><strong>${configured ? "configured" : "missing"}</strong></article>`).join("")}
     <article class="job-runtime-card"><span>Repository</span><strong>${escapeHtml(runtime.repository)}</strong></article>
     <article class="job-runtime-card"><span>Fallbacks</span><strong>${escapeHtml(runtime.productionFallbacks)}</strong></article>
@@ -120,16 +132,36 @@ function renderSummary(summary = {}) {
     <section class="job-calibration"><div><span>Calibration labels</span><strong>${labelled} / ${target}</strong></div><div class="job-budget-track"><span style="width:${Math.min(100, target ? (labelled / target) * 100 : 0).toFixed(1)}%"></span></div><small>Auto-shortlisting ${calibration.active ? "enabled" : "locked"} &middot; top-10 precision ${Math.round(Number(calibration.precisionTopTen || 0) * 100)}% &middot; false rejection ${Math.round(Number(calibration.falseRejectionRate || 0) * 100)}%</small></section>`;
 }
 
-function renderLocalProcessing(local = {}) {
+function renderAudit(audit) {
+  if (!audit) return "";
+  const population = audit.population || {};
+  const anomalyEntries = Object.entries(population.anomaliesByCode || {});
+  return `<section class="job-calibration">
+    <div><span>Independent evaluation audit</span><strong>${Number(audit.sample?.length || 0)} / ${Number(audit.requestedSampleSize || 20)} sampled</strong></div>
+    <small>${Number(population.currentDeepAndCritic || 0)} current evaluator + critic results &middot; ${Number(population.incompleteOrStale || 0)} incomplete or stale &middot; ${Number(population.jobsWithAutomatedAnomalies || 0)} jobs with anomalies</small>
+    ${anomalyEntries.length ? `<div class="job-budget-providers">${anomalyEntries.map(([code, count]) => `<span>${escapeHtml(statusLabel(code))}: ${Number(count || 0)}</span>`).join("")}</div>` : `<small>No automated anomalies found in the evaluated population.</small>`}
+  </section>`;
+}
+
+function renderLocalProcessing(local = {}, audit = null, loadingAction = "") {
   const tasks = local.tasks || [];
   const workers = local.workers || [];
   const worker = workers[0] || null;
   const queueControl = local.queueControl || {};
-  return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Local inference</p><h2>Windows worker</h2></div><span>${worker ? escapeHtml(statusLabel(worker.status)) : "Not connected yet"}</span></div>
+  const connected = workerIsConnected(worker);
+  return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Local inference</p><h2>Windows worker</h2></div><span>${escapeHtml(workerStatusLabel(worker))}</span></div>
     <div class="job-runtime-grid">
       ${tasks.length ? tasks.map((task) => `<article class="job-runtime-card"><span>${escapeHtml(statusLabel(task.taskType))} &middot; ${escapeHtml(statusLabel(task.status))}</span><strong>${Number(task.count || 0)}</strong></article>`).join("") : `<article class="job-runtime-card"><span>Queue</span><strong>Empty</strong></article>`}
       ${worker ? `<article class="job-runtime-card"><span>Last seen</span><strong>${escapeHtml(formatDate(worker.lastSeenAt))}</strong></article>` : ""}<article class="job-runtime-card"><span>Queue hold</span><strong>${queueControl.holdNewTasks ? "Enabled" : "Disabled"}</strong></article>
     </div>
+    <div class="job-actions">
+      <button type="button" class="button button-primary" data-queue-release ${!queueControl.holdNewTasks || !connected || loadingAction ? "disabled" : ""}>${loadingAction === "release" ? "Releasing..." : "Release calibration 20"}</button>
+      <button type="button" class="button button-secondary" data-queue-retry ${!connected || loadingAction ? "disabled" : ""}>${loadingAction === "retry" ? "Retrying..." : "Retry failed"}</button>
+      <button type="button" class="button button-secondary" data-run-audit ${loadingAction ? "disabled" : ""}>${loadingAction === "audit" ? "Auditing..." : "Audit 20 evaluations"}</button>
+    </div>
+    ${!connected ? `<p class="job-muted">The worker must send a current heartbeat before a calibration cohort can be released.</p>` : ""}
+    ${!queueControl.holdNewTasks ? `<p class="job-muted">Pause the full queue before releasing a bounded calibration cohort.</p>` : ""}
+    ${renderAudit(audit)}
   </section>`;
 }
 
@@ -370,7 +402,7 @@ function renderDashboard(state) {
       <label class="verify-field"><span>Manual job URLs</span><textarea rows="3" data-manual-urls placeholder="One URL per line">${escapeHtml(state.manualUrls)}</textarea></label></div></section>
     ${state.error ? `<p class="auth-error">${escapeHtml(state.error)}</p>` : ""}
     ${state.notice ? `<p class="job-notice">${escapeHtml(state.notice)}</p>` : ""}
-    ${renderSummary(dashboard.summary)}${renderBudget(dashboard.usage)}${renderLocalProcessing(dashboard.localProcessing)}${renderRuntime(dashboard.runtime, dashboard.localProcessing)}
+    ${renderSummary(dashboard.summary)}${renderBudget(dashboard.usage)}${renderLocalProcessing(dashboard.localProcessing, state.audit, state.loadingAction)}${renderRuntime(dashboard.runtime, dashboard.localProcessing)}
     <nav class="job-filter-tabs" aria-label="Job intelligence views">${TABS.map(([value, label]) => `<button type="button" class="${active === value ? "is-active" : ""}" data-job-view="${value}">${label} (${Number(dashboard.tabCounts?.[value] || 0)})</button>`).join("")}</nav>
     ${renderViewFilters(dashboard, state)}
     ${content}
@@ -379,7 +411,7 @@ function renderDashboard(state) {
 
 export function mountJobSearch(root) {
   if (!root) return;
-  const state = { status: null, dashboard: null, loading: false, error: "", notice: "", view: "all_candidates", page: 1, decisionSource: "all", roleFamily: "all", manualUrls: "" };
+  const state = { status: null, dashboard: null, audit: null, loading: false, loadingAction: "", error: "", notice: "", view: "all_candidates", page: 1, decisionSource: "all", roleFamily: "all", manualUrls: "" };
 
   async function loadStatus() { state.status = await request("/api/job-search/status"); }
   async function loadDashboard() {
@@ -441,6 +473,35 @@ export function mountJobSearch(root) {
         state.notice = `Run queued: ${queued.runId}`; state.loading = false; await render();
         pollRun(queued.runId).catch((error) => { state.error = error.message; render(); });
       } catch (error) { state.loading = false; state.error = error.message; await render(); }
+    });
+    root.querySelector("[data-queue-release]")?.addEventListener("click", async () => {
+      try {
+        state.loadingAction = "release"; state.error = ""; await render();
+        const operationKey = `dashboard-calibration-v4-${Date.now()}`;
+        const result = await request("/api/job-search/local-queue/release", { method: "POST", body: JSON.stringify({ operationKey, limit: 20 }) });
+        state.notice = `Released ${Number(result.selectedCount || 0)} jobs for the evaluator and critic.`;
+        await loadDashboard();
+      } catch (error) { state.error = error.message; }
+      state.loadingAction = ""; await render();
+    });
+    root.querySelector("[data-queue-retry]")?.addEventListener("click", async () => {
+      try {
+        state.loadingAction = "retry"; state.error = ""; await render();
+        const operationKey = `dashboard-retry-v4-${Date.now()}`;
+        const result = await request("/api/job-search/local-queue/retry-failed", { method: "POST", body: JSON.stringify({ operationKey, limit: 20 }) });
+        state.notice = `Requeued ${Number(result.retriedCount || 0)} failed tasks in the active cohort.`;
+        await loadDashboard();
+      } catch (error) { state.error = error.message; }
+      state.loadingAction = ""; await render();
+    });
+    root.querySelector("[data-run-audit]")?.addEventListener("click", async () => {
+      try {
+        state.loadingAction = "audit"; state.error = ""; await render();
+        const result = await request(`/api/job-search/audit?sampleSize=20&seed=${encodeURIComponent(`dashboard-${new Date().toISOString().slice(0, 10)}`)}`);
+        state.audit = result.audit;
+        state.notice = `Audit sampled ${Number(result.audit?.sample?.length || 0)} current evaluator-and-critic results.`;
+      } catch (error) { state.error = error.message; }
+      state.loadingAction = ""; await render();
     });
     root.querySelectorAll("[data-job-view]").forEach((node) => node.addEventListener("click", async () => {
       try { state.view = node.dataset.jobView; state.page = 1; state.decisionSource = "all"; state.roleFamily = "all"; state.error = ""; await loadDashboard(); }

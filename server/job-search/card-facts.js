@@ -74,6 +74,100 @@ function claimFor(claims, pattern) {
   return claims.find((claim) => claim?.evidenceType !== "unknown" && pattern.test(clean(claim?.claimType)));
 }
 
+function comparableJobUrl(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    const linkedInId = url.pathname.match(/\/jobs\/view\/(?:[^/]*-)?(\d{8,})\/?$/i)?.[1];
+    const indeedId = url.searchParams.get("jk");
+    if (linkedInId) return `linkedin:${linkedInId}`;
+    if (indeedId) return `indeed:${indeedId}`;
+    return `${host}${url.pathname.replace(/\/$/, "").toLowerCase()}`;
+  } catch {
+    return "";
+  }
+}
+
+function normalizedCompanyTokens(company) {
+  return clean(company).toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)
+    .filter((token) => token.length >= 3 && !["the", "inc", "llc", "ltd", "corp", "corporation", "company", "group", "holdings"].includes(token));
+}
+
+function evidenceNamesCompany(text, company) {
+  const normalized = clean(text).toLowerCase().replace(/[^a-z0-9 ]+/g, " ");
+  const tokens = normalizedCompanyTokens(company);
+  if (!tokens.length) return false;
+  return tokens.length === 1
+    ? normalized.includes(tokens[0])
+    : tokens.filter((token) => normalized.includes(token)).length >= Math.min(2, tokens.length);
+}
+
+function evidenceNamesRole(text, title) {
+  const ignored = new Set(["senior", "sr", "principal", "staff", "lead", "manager", "director", "head", "chief", "the", "and", "of"]);
+  const tokens = clean(title).toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)
+    .filter((token) => token.length >= 3 && !ignored.has(token));
+  if (!tokens.length) return false;
+  const normalized = clean(text).toLowerCase().replace(/[^a-z0-9 ]+/g, " ");
+  return tokens.filter((token) => normalized.includes(token)).length >= Math.min(2, tokens.length);
+}
+
+function normalizedLocationMarker(location) {
+  const ignored = new Set(["remote", "hybrid", "onsite", "on site", "united states", "usa", "multiple locations"]);
+  return clean(location).toLowerCase().split(/\s+-\s+|[,/|;]/)
+    .map((part) => part.replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim())
+    .find((part) => part.length >= 4 && !ignored.has(part) && !/^[a-z]{2}$/.test(part)) || "";
+}
+
+function evidenceMatchesPosting(text, sourceUrl, job) {
+  const evidenceUrl = comparableJobUrl(sourceUrl);
+  const postingUrl = comparableJobUrl(job?.canonicalUrl || job?.url);
+  if (evidenceUrl && postingUrl && evidenceUrl === postingUrl) return true;
+  const location = normalizedLocationMarker(job?.location);
+  return Boolean(location && clean(text).toLowerCase().replace(/[^a-z0-9 ]+/g, " ").includes(location));
+}
+
+function claimMatchesPosting(claim, job) {
+  const claimUrl = comparableJobUrl(claim?.sourceUrl);
+  const postingUrl = comparableJobUrl(job?.canonicalUrl || job?.url);
+  if (claimUrl && postingUrl && claimUrl === postingUrl) return true;
+  if (!claimUrl) return false;
+  const research = (job?.details?.research?.results || []).find((item) => comparableJobUrl(item?.url) === claimUrl);
+  if (!research) return false;
+  const researchText = clean(`${research.title || ""} ${research.description || ""}`);
+  return evidenceNamesCompany(researchText, job?.company)
+    && evidenceNamesRole(researchText, job?.title)
+    && evidenceMatchesPosting(researchText, research?.url, job);
+}
+
+function employerEligibilityFact(job, claims) {
+  const claim = claims.find((item) => {
+    if (item?.evidenceType === "unknown" || claimMatchesPosting(item, job)) return false;
+    const text = clean(`${item?.claimType || ""} ${item?.value || ""} ${item?.supportingPassage || ""}`);
+    return /h-?1b|lca|perm|e-?verify|sponsor(?:ship|ing)?/i.test(text);
+  });
+  const storedEvidence = job?.details?.employerEligibilityEvidence || [];
+  const stored = storedEvidence.find((item) => /h-?1b|lca|perm|sponsor(?:ship|ing)?/i.test(
+    clean(`${item?.value || ""} ${item?.supportingPassage || ""}`),
+  )) || storedEvidence[0];
+  const item = claim || (stored ? {
+    value: stored.value,
+    supportingPassage: stored.supportingPassage,
+    sourceUrl: stored.sourceUrl,
+  } : null);
+  if (!item) return null;
+  const evidence = clean(item.supportingPassage || item.value);
+  const sponsorshipHistory = /h-?1b|lca|perm|sponsor(?:ship|ing)?/i.test(evidence);
+  return {
+    status: "employer_history",
+    label: sponsorshipHistory
+      ? "Employer sponsorship history; this role is unverified"
+      : "Employer eligibility history; this role is unverified",
+    evidence,
+    evidenceType: "inferred",
+    sourceUrl: item.sourceUrl || "",
+  };
+}
+
 function sourceHost(url) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -104,7 +198,10 @@ export function buildJobCardFacts(job) {
     ? structuredCompensation
     : "";
 
-  const candidateCompensationClaim = claimFor(claims, /(compensation|salary|base_pay|pay_range)/i);
+  const candidateCompensationClaim = claimFor(
+    claims.filter((claim) => claimMatchesPosting(claim, job)),
+    /(compensation|salary|base_pay|pay_range)/i,
+  );
   const compensationClaim = candidateCompensationClaim
     && !/^(not (specified|listed|available)|unknown|n\/?a)$/i.test(clean(candidateCompensationClaim.value))
     && (findPatternEvidence(`${candidateCompensationClaim.value} ${candidateCompensationClaim.supportingPassage || ""}`, COMPENSATION_PATTERNS)
@@ -118,18 +215,18 @@ export function buildJobCardFacts(job) {
     evidence: usableStructuredCompensation,
     evidenceType: "explicit",
     sourceUrl: url,
-  } : compensationClaim ? {
-    status: "listed",
-    label: clean(compensationClaim.value),
-    evidence: clean(compensationClaim.supportingPassage || compensationClaim.value),
-    evidenceType: compensationClaim.evidenceType,
-    sourceUrl: compensationClaim.sourceUrl || url,
   } : compensationMatch ? {
     status: "listed",
     label: compensationMatch.value,
     evidence: compensationMatch.passage,
     evidenceType: "explicit",
     sourceUrl: url,
+  } : compensationClaim ? {
+    status: "listed",
+    label: clean(compensationClaim.value),
+    evidence: clean(compensationClaim.supportingPassage || compensationClaim.value),
+    evidenceType: compensationClaim.evidenceType,
+    sourceUrl: compensationClaim.sourceUrl || url,
   } : {
     status: "not_listed",
     label: "Not listed in the job posting",
@@ -138,22 +235,26 @@ export function buildJobCardFacts(job) {
     sourceUrl: url,
   };
 
-  const visaClaim = claimFor(claims, /(visa|sponsor|work_authorization|immigration|citizenship|clearance)/i);
+  const visaClaim = claimFor(
+    claims.filter((claim) => claimMatchesPosting(claim, job)),
+    /(visa|sponsor|work_authorization|immigration|citizenship|clearance)/i,
+  );
   const visaMatch = findPatternEvidence(description, VISA_PATTERNS);
   const optCptMatch = !visaMatch && hasOptCptCompatibilityEvidence(description);
   const claimVisa = visaClaim ? visaStatusFromText(`${visaClaim.value} ${visaClaim.supportingPassage || ""}`) : null;
-  const visa = visaClaim ? {
-    status: claimVisa.status,
-    label: clean(visaClaim.value) || claimVisa.label,
-    evidence: clean(visaClaim.supportingPassage || visaClaim.value),
-    evidenceType: visaClaim.evidenceType,
-    sourceUrl: visaClaim.sourceUrl || url,
-  } : visaMatch ? {
+  const employerEligibility = employerEligibilityFact(job, claims);
+  const visa = visaMatch ? {
     status: visaMatch.item.status,
     label: visaMatch.item.label,
     evidence: visaMatch.passage,
     evidenceType: "explicit",
     sourceUrl: url,
+  } : visaClaim ? {
+    status: claimVisa.status,
+    label: claimVisa.label,
+    evidence: clean(visaClaim.supportingPassage || visaClaim.value),
+    evidenceType: visaClaim.evidenceType,
+    sourceUrl: visaClaim.sourceUrl || url,
   } : optCptMatch ? {
     status: "opt_friendly",
     label: "F-1/OPT/CPT language found",
@@ -164,7 +265,7 @@ export function buildJobCardFacts(job) {
     ])?.passage || "Immigration-context F-1/OPT/CPT language appears in the posting.",
     evidenceType: "explicit",
     sourceUrl: url,
-  } : {
+  } : employerEligibility || {
     status: "unknown",
     label: "No explicit sponsorship evidence",
     evidence: "",

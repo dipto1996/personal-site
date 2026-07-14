@@ -1453,6 +1453,97 @@ test("job cards preserve unknown eligibility and compensation instead of inventi
   assert.equal(facts.visa.status, "unknown");
 });
 
+test("job cards do not present company-wide salary or sponsorship history as role-specific facts", () => {
+  const facts = cardFacts.buildJobCardFacts({
+    canonicalUrl: "https://www.linkedin.com/jobs/view/director-product-analytics-4437899533",
+    title: "Director of Product Analytics",
+    company: "Example Analytics",
+    location: "New York, NY",
+    description: "Lead product analytics and experimentation.",
+    details: {
+      claims: [
+        {
+          claimType: "compensation",
+          value: "Average company salary is $122,000.",
+          supportingPassage: "Employees at Example Analytics earn an average annual salary of $122,000.",
+          sourceUrl: "https://salary.example.com/example-analytics",
+          evidenceType: "inferred",
+        },
+        {
+          claimType: "visa",
+          value: "Example Analytics sponsors H-1B visas.",
+          supportingPassage: "Example Analytics filed 250 H-1B LCAs in 2025.",
+          sourceUrl: "https://visas.example.com/example-analytics",
+          evidenceType: "inferred",
+        },
+      ],
+      research: { results: [] },
+    },
+  });
+
+  assert.equal(facts.compensation.status, "not_listed");
+  assert.equal(facts.visa.status, "employer_history");
+  assert.match(facts.visa.label, /this role is unverified/i);
+  assert.doesNotMatch(facts.visa.label, /^yes$/i);
+});
+
+test("explicit posting restrictions override positive employer sponsorship history on job cards", () => {
+  const facts = cardFacts.buildJobCardFacts({
+    canonicalUrl: "https://jobs.example.com/director-product-analytics",
+    title: "Director of Product Analytics",
+    company: "Example Analytics",
+    location: "New York, NY",
+    description: "Lead product analytics. We cannot provide visa sponsorship now or in the future.",
+    details: {
+      claims: [{
+        claimType: "visa",
+        value: "Example Analytics sponsors H-1B visas.",
+        supportingPassage: "Example Analytics has recent certified H-1B LCAs.",
+        sourceUrl: "https://visas.example.com/example-analytics",
+        evidenceType: "inferred",
+      }],
+      research: { results: [] },
+    },
+  });
+
+  assert.equal(facts.visa.status, "not_available");
+  assert.equal(facts.visa.label, "Sponsorship not available");
+});
+
+test("exact-posting claims remain visible when the description is incomplete", () => {
+  const facts = cardFacts.buildJobCardFacts({
+    canonicalUrl: "https://www.linkedin.com/jobs/view/director-product-analytics-4437899533?trackingId=abc",
+    title: "Director of Product Analytics",
+    company: "Example Analytics",
+    location: "New York, NY",
+    description: "Lead product analytics and experimentation.",
+    details: {
+      claims: [
+        {
+          claimType: "compensation",
+          value: "Base salary is $190,000-$220,000.",
+          supportingPassage: "The annual base salary range is $190,000-$220,000.",
+          sourceUrl: "https://linkedin.com/jobs/view/4437899533",
+          evidenceType: "explicit",
+        },
+        {
+          claimType: "visa",
+          value: "Visa sponsorship is available.",
+          supportingPassage: "Visa sponsorship is available for this position.",
+          sourceUrl: "https://linkedin.com/jobs/view/4437899533",
+          evidenceType: "explicit",
+        },
+      ],
+      research: { results: [] },
+    },
+  });
+
+  assert.equal(facts.compensation.status, "listed");
+  assert.match(facts.compensation.label, /\$190,000-\$220,000/);
+  assert.equal(facts.visa.status, "available");
+  assert.equal(facts.visa.label, "Sponsorship available");
+});
+
 test("truncated structured pay does not override a complete hourly range", () => {
   const job = auditReadyJob({
     title: "Manager Advanced Analytics-28513",

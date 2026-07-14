@@ -839,6 +839,56 @@ test("Windows triage and deep packets exclude stale verdicts while critic receiv
   assert.equal(JSON.stringify(criticPacket).includes("STALE MODEL CLAIM"), true);
 });
 
+test("deterministic deep gates use current-pass claims instead of stale stored model claims", () => {
+  const job = auditReadyJob();
+  job.description = "Lead product analytics, experimentation, and customer measurement.";
+  job.details.claims = [{
+    claimType: "work_authorization",
+    value: "No visa sponsorship",
+    sourceUrl: job.canonicalUrl,
+    supportingPassage: "STALE CLAIM: no visa sponsorship.",
+    confidence: 1,
+    evidenceType: "explicit",
+  }];
+  const currentClaims = [
+    {
+      claimType: "work_authorization",
+      value: "Visa sponsorship is available, including F-1 OPT candidates.",
+      sourceUrl: job.canonicalUrl,
+      supportingPassage: "Visa sponsorship is available, including F-1 OPT candidates.",
+      confidence: 1,
+      evidenceType: "explicit",
+    },
+    {
+      claimType: "compensation",
+      value: "Base salary range: $180,000-$210,000.",
+      sourceUrl: job.canonicalUrl,
+      supportingPassage: "Base salary range: $180,000-$210,000.",
+      confidence: 1,
+      evidenceType: "explicit",
+    },
+    {
+      claimType: "coding_interview",
+      value: "No coding interview is required.",
+      sourceUrl: job.canonicalUrl,
+      supportingPassage: "No coding interview is required.",
+      confidence: 1,
+      evidenceType: "explicit",
+    },
+  ];
+  const currentEvidenceJob = workflow.withCurrentEvaluationClaims(job, currentClaims);
+  const result = evaluationFramework.finalizeDeepEvaluation(currentEvidenceJob, {
+    ...job.details.deepEvaluation,
+    claims: currentClaims,
+  });
+
+  assert.equal(JSON.stringify(currentEvidenceJob.details.claims).includes("STALE CLAIM"), false);
+  assert.equal(result.mustHave.workAuthorization.status, "met");
+  assert.equal(result.mustHave.compensation.status, "met");
+  assert.equal(result.mustHave.codingInterview.status, "met");
+  assert.equal(result.verdict, "apply");
+});
+
 test("maximal Windows worker packet fits the 8192 context budget and retains priority evidence", () => {
   const priorityEvidence = [
     {

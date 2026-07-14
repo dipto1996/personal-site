@@ -1,7 +1,7 @@
 import { TARGET_PROFILE } from "./profile.js";
 import { classifyCandidateTitle } from "./title-ontology.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v5";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v6";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 

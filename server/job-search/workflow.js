@@ -71,7 +71,7 @@ import { normalizeTimestampInput } from "./utils.js";
 import { rotatingWatchlistCompanies } from "./watchlist.js";
 import { parseWorkerOutput } from "./worker-contract.js";
 
-export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v8";
+export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v9";
 
 const INTERVIEW_RISK_INSTRUCTIONS = "Infer interview risk from the role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work do not alone prove a coding round.";
 
@@ -792,16 +792,17 @@ async function deepEvaluateJobs(jobs, runId) {
       }));
       continue;
     }
-    const finalized = finalizeDeepEvaluation(job, response.result);
+    const currentClaims = dedupeClaims(response.result.claims || []);
+    const finalized = finalizeDeepEvaluation(withCurrentEvaluationClaims(job, currentClaims), response.result);
     const evaluation = await recordEvaluation({
       jobId: job.id, runId, stage: "deep", provider: response.provider, model: response.model,
       promptVersion: PROMPT_VERSION, verdict: finalized.verdict, score: finalized.overallScore,
       output: finalized, usage: response.usage,
     });
-    const claims = [
+    const claims = dedupeClaims([
       ...(job.details?.sourceEvidence || []),
       ...(finalized.claims || []),
-    ];
+    ]);
     await replaceClaims(job.id, evaluation.id, claims);
     const status = finalized.verdict === "apply" ? "critic_pending"
       : finalized.verdict === "maybe" ? "needs_review" : "passed";
@@ -1126,13 +1127,14 @@ export async function runLocalDeepEvaluation({ jobId, runId = null }) {
     runId, operation: "local_deep_fit", maxTokens: 3500,
   });
   if (!response.result) throw new Error(`Local deep evaluation failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
-  const finalized = finalizeDeepEvaluation(job, response.result);
+  const currentClaims = dedupeClaims(response.result.claims || []);
+  const finalized = finalizeDeepEvaluation(withCurrentEvaluationClaims(job, currentClaims), response.result);
   const evaluation = await recordEvaluation({
     jobId: job.id, runId, stage: "deep", provider: response.provider, model: response.model,
     promptVersion: PROMPT_VERSION, verdict: finalized.verdict, score: finalized.overallScore,
     output: finalized, usage: response.usage,
   });
-  const claims = [...(job.details?.sourceEvidence || []), ...(finalized.claims || [])];
+  const claims = dedupeClaims([...(job.details?.sourceEvidence || []), ...(finalized.claims || [])]);
   await replaceClaims(job.id, evaluation.id, claims);
   const status = finalized.verdict === "apply" ? "critic_pending"
     : finalized.verdict === "maybe" ? "needs_review" : "passed";
@@ -1213,6 +1215,16 @@ function dedupeClaims(claims = []) {
   return [...unique.values()].slice(0, 30);
 }
 
+export function withCurrentEvaluationClaims(job, claims = []) {
+  return {
+    ...job,
+    details: {
+      ...(job?.details || {}),
+      claims: dedupeClaims(claims),
+    },
+  };
+}
+
 export async function applyWindowsWorkerResult({ task, output, resultId, model = "qwen3-4b-q4_k_m", usage = {} }) {
   const job = await getJob(task.jobId);
   if (!job) throw new Error(`Job ${task.jobId} was not found.`);
@@ -1265,7 +1277,11 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
       },
     });
   } else if (task.taskType === "deep") {
-    const result = finalizeDeepEvaluation(job, parsed.evaluation);
+    const currentClaims = dedupeClaims([
+      ...parsed.extraction.claims,
+      ...(parsed.evaluation.claims || []),
+    ]);
+    const result = finalizeDeepEvaluation(withCurrentEvaluationClaims(job, currentClaims), parsed.evaluation);
     const evaluation = await recordEvaluation({
       ...evaluationBase,
       id: deterministicWorkerEvaluationId(task.taskKey, "deep"),
@@ -1276,8 +1292,7 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
     });
     const claims = dedupeClaims([
       ...(job.details?.sourceEvidence || []),
-      ...parsed.extraction.claims,
-      ...result.claims,
+      ...currentClaims,
     ]);
     await replaceClaims(job.id, evaluation.id, claims);
     updated = await upsertJob({

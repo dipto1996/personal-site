@@ -1740,6 +1740,7 @@ export async function recordWorkerHeartbeat({ workerId, status = "idle", version
 export async function getLocalWorkerStatus() {
   await ensureJobSearchRepository();
   const queueControl = await getLocalQueueControl();
+  const calibrationHoldError = "Held: windows_thermal_cloud_calibration";
   if (!hasDatabase()) {
     const db = await readLocal();
     const grouped = new Map();
@@ -1751,17 +1752,22 @@ export async function getLocalWorkerStatus() {
       tasks: [...grouped.values()],
       workers: db.workerHeartbeats,
       queueControl,
+      recoverableCalibrationCount: new Set(db.localTasks
+        .filter((task) => task.status === "held" && task.lastError === calibrationHoldError)
+        .map((task) => task.jobId)).size,
     };
   }
   const sql = getSql();
-  const [tasks, workers] = await Promise.all([
+  const [tasks, workers, recoverable] = await Promise.all([
     sql`SELECT status, task_type AS "taskType", COUNT(*)::int AS count
       FROM js_local_tasks GROUP BY status, task_type ORDER BY status, task_type`,
     sql`SELECT worker_id AS "workerId", status, version, current_task_id AS "currentTaskId",
       metadata, started_at AS "startedAt", last_seen_at AS "lastSeenAt"
       FROM js_worker_heartbeats ORDER BY last_seen_at DESC`,
+    sql`SELECT COUNT(DISTINCT job_id)::int AS count FROM js_local_tasks
+      WHERE status='held' AND last_error=${calibrationHoldError}`,
   ]);
-  return { tasks, workers, queueControl };
+  return { tasks, workers, queueControl, recoverableCalibrationCount: Number(recoverable[0]?.count || 0) };
 }
 
 export async function canSpend(provider, estimatedCostUsd) {

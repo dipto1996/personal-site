@@ -1174,7 +1174,7 @@ test("private dashboard exposes the authenticated free-cloud calibration control
   const source = await readFile(path.resolve("apps/jobsearch/index.js"), "utf8");
   assert.match(source, /data-cloud-calibration/);
   assert.match(source, /\/api\/job-search\/calibration\/free-cloud/);
-  assert.match(source, /activeCalibrationSize !== 20/);
+  assert.match(source, /cloudCalibrationSize !== 20/);
 });
 
 test("Windows updater preserves the protected credential and fast-forwards without model reinstallation", async () => {

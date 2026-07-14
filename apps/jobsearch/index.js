@@ -192,6 +192,8 @@ function renderLocalProcessing(local = {}, audit = null, loadingAction = "") {
   const activeCalibrationSize = Array.isArray(queueControl.activeReleaseJobIds)
     ? queueControl.activeReleaseJobIds.length
     : 0;
+  const recoverableCalibrationSize = Number(local.recoverableCalibrationCount || 0);
+  const cloudCalibrationSize = activeCalibrationSize || recoverableCalibrationSize;
   const workerDetail = workerStatusDetail(worker);
   return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Local inference</p><h2>Windows worker</h2></div><span>${escapeHtml(workerStatusLabel(worker))}</span></div>
     <div class="job-runtime-grid">
@@ -201,7 +203,7 @@ function renderLocalProcessing(local = {}, audit = null, loadingAction = "") {
     ${workerDetail ? `<p class="job-muted">${escapeHtml(workerDetail)}</p>` : ""}
     <div class="job-actions">
       <button type="button" class="button button-primary" data-queue-release ${!queueControl.holdNewTasks || !connected || loadingAction ? "disabled" : ""}>${loadingAction === "release" ? "Releasing..." : "Release calibration 20"}</button>
-      <button type="button" class="button button-primary" data-cloud-calibration ${activeCalibrationSize !== 20 || loadingAction ? "disabled" : ""}>${loadingAction === "cloud-calibration" ? "Starting..." : `Run free cloud calibration (${activeCalibrationSize})`}</button>
+      <button type="button" class="button button-primary" data-cloud-calibration ${cloudCalibrationSize !== 20 || loadingAction ? "disabled" : ""}>${loadingAction === "cloud-calibration" ? "Starting..." : `Run free cloud calibration (${cloudCalibrationSize})`}</button>
       <button type="button" class="button button-secondary" data-queue-retry ${!connected || loadingAction ? "disabled" : ""}>${loadingAction === "retry" ? "Retrying..." : "Retry failed"}</button>
       <button type="button" class="button button-secondary" data-run-audit ${loadingAction ? "disabled" : ""}>${loadingAction === "audit" ? "Auditing..." : "Audit 20 evaluations"}</button>
     </div>

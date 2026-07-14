@@ -6,7 +6,7 @@ import {
   SPONSORSHIP_AVAILABLE_PATTERN,
 } from "./authorization-evidence.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v10";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v11";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 
@@ -46,6 +46,20 @@ const LEADERSHIP_TITLE = /\b(?:manager|director|head|chief|vice president|vp|gen
 const ELEVATED_TECHNICAL_TITLE = /\b(?:product scientist|product data scientist|decision scientist|experimentation scientist|measurement scientist|marketing scientist|data science (?:manager|director|lead|head)|(?:manager|director|head)[^a-z0-9]{0,3}(?:of )?data science|product analytics (?:manager|lead)|experimentation (?:manager|lead)|(?:senior|principal|staff) (?:data|product|marketing|growth|business) analyst)\b/i;
 const LOW_CODING_LEADERSHIP_TITLE = /\b(?:analytics|data analysis|insights|business intelligence|strategy|data product|product manager|product management|program manager|business manager|chief of staff|governance|risk|operations)\b/i;
 const HANDS_ON_IMPLEMENTATION = /\bhands-on\b[^.]{0,100}\b(?:coding|python|sql|software development|model development|machine learning engineering)\b|\b(?:write|develop|deploy|maintain|productionize)\b[^.]{0,100}\b(?:production code|software services|machine learning models|ml models)\b/i;
+const TECHNICAL_IMPLEMENTATION_REQUIREMENTS = /\b(?:\d+\+?\s*years?[^.]{0,80}(?:python|software engineering|open source data technolog|api|data pipeline|feature engineering)|developing with open source data technolog|build and maintain scalable data pipelines|production-ready solutions)\b/i;
+const EXPLICIT_ENGINEERING_IDENTITY = /\b(?:you are|seeks?|seeking|looking for|hiring|position is for|role is for)\b[^.!?]{0,100}\b(?:ai\s*(?:&|and)?\s*automation|data|software|machine learning|ml|platform|context|research) engineer\b/i;
+const EXCLUDED_NON_CORE_TITLE = /\b(?:counsel|attorney|lawyer)\b|\b(?:bipartisan\s+)?(?:federal|legislative)\s+policy\s+(?:lead|director|manager|head)\b/i;
+const NON_VACANCY_TITLE = /\b(?:open positions?|current openings?|career opportunities|careers?\s*(?:and|&)\s*internships?|explore careers?|jobs?\s*(?:and|&)\s*careers?)\b|\b(?:artificial intelligence|ai|data science)[^|]{0,45}\bjobs?\b\s*[|:-]/i;
+const ARTICLE_TITLE = /\bhow to\b[^|]{0,100}\bjob\b|\b(?:guide|tips?|advice)\b[^|]{0,80}\b(?:interview|job search|hiring)\b/i;
+const MULTI_ROLE_PAGE = /\b(?:showing\s+\d+\s*-\s*\d+\s+of\s+\d+\s+results|filter results|search within these results|refine results)\b/i;
+const SPECIFIC_VACANCY_LANGUAGE = /\b(?:responsibilities|qualifications|requirements|about the role|what you(?:'|’)ll do|what we(?:'|’)re looking for|required experience|job description)\b/i;
+const SPECIALIST_MANDATORY_GAPS = Object.freeze([
+  { id: "healthcare_claims", label: "health-insurance claims experience", pattern: /\b(?:health insurance|medical|pharmacy) claims? data\b/i },
+  { id: "emr_ehr", label: "multi-hospital EMR/EHR experience", pattern: /\b(?:emr|ehr|electronic medical records?)\b/i },
+  { id: "medical_codes", label: "specialized medical coding systems", pattern: /\b(?:icd(?:\s*-?\s*10)?|cpt|ndc|drg|medical and pharmacy codes?)\b/i },
+  { id: "hl7", label: "HL7 expertise", pattern: /\bhl7\b/i },
+  { id: "payer_provider", label: "payer/provider contracting experience", pattern: /\b(?:payer|health plan)[^.!?]{0,100}(?:provider|health system)[^.!?]{0,100}(?:contract|negotiat)|\bvalue-based care models?\b/i },
+]);
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -53,6 +67,61 @@ function clamp(value, minimum, maximum) {
 
 function clean(value) {
   return String(value || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export function classifyVacancyIntegrity(job) {
+  const title = clean(job?.title);
+  const description = clean(job?.description);
+  let hostname = "";
+  try {
+    hostname = new URL(job?.canonicalUrl || "").hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    hostname = "";
+  }
+  const titleSignalsLanding = NON_VACANCY_TITLE.test(title);
+  const titleSignalsArticle = ARTICLE_TITLE.test(title);
+  const newsArticle = /(?:^|\.)(?:businessinsider|forbes|fortune|fastcompany|techcrunch)\.com$/i.test(hostname)
+    && !SPECIFIC_VACANCY_LANGUAGE.test(description);
+  const aggregatesRoles = MULTI_ROLE_PAGE.test(description);
+  const lacksSpecificDuties = description.length < 350 || !SPECIFIC_VACANCY_LANGUAGE.test(description);
+  if (titleSignalsArticle || newsArticle) {
+    return { status: "blocked", reason: "The source is an article or career advice page, not a specific job vacancy.", sourceUrl: job?.canonicalUrl || "", signals: ["article"] };
+  }
+  if (aggregatesRoles) {
+    return { status: "blocked", reason: "The source aggregates multiple openings and is not one specific vacancy.", sourceUrl: job?.canonicalUrl || "", signals: ["multi_role_page"] };
+  }
+  if (titleSignalsLanding && lacksSpecificDuties) {
+    return { status: "blocked", reason: "The source is a careers landing page without one role's responsibilities and requirements.", sourceUrl: job?.canonicalUrl || "", signals: ["career_landing_page"] };
+  }
+  return { status: "met", reason: "The source represents a specific vacancy.", sourceUrl: job?.canonicalUrl || "", signals: [] };
+}
+
+function deterministicExpertiseConstraint(job) {
+  const vacancy = classifyVacancyIntegrity(job);
+  if (vacancy.status === "blocked") {
+    return { blocked: true, maxScore: 0, evidenceStatus: "explicit", reason: vacancy.reason, signals: vacancy.signals, vacancy };
+  }
+  const title = clean(job?.title);
+  const description = clean(job?.description);
+  const ontology = classifyCandidateTitle(title);
+  if (EXCLUDED_NON_CORE_TITLE.test(title)) {
+    return { blocked: true, maxScore: 1, evidenceStatus: "explicit", reason: "The vacancy's primary function is legal counsel or federal legislative policy, not analytics, experimentation, data science, strategy analytics, or data-product leadership.", signals: ["excluded_non_core_title"], vacancy };
+  }
+  if ((ontology.excludedConcepts?.length && !ontology.eligible) || EXPLICIT_ENGINEERING_IDENTITY.test(description)) {
+    return { blocked: true, maxScore: 1, evidenceStatus: "explicit", reason: "The vacancy's primary function is hands-on engineering implementation rather than analytics, data-science management, strategy analytics, or product leadership.", signals: ["engineering_implementation"], vacancy };
+  }
+  const specialistGaps = SPECIALIST_MANDATORY_GAPS.filter((item) => item.pattern.test(description));
+  if (/\b(?:required job qualifications|required qualifications|what you need|requirements)\b/i.test(description) && specialistGaps.length >= 3) {
+    return {
+      blocked: true,
+      maxScore: 2,
+      evidenceStatus: "explicit",
+      reason: `The role is analytically adjacent, but it requires several severe specialist capabilities absent from the resume: ${specialistGaps.map((item) => item.label).join(", ")}.`,
+      signals: specialistGaps.map((item) => item.id),
+      vacancy,
+    };
+  }
+  return { blocked: false, maxScore: 5, evidenceStatus: "inferred", reason: "", signals: [], vacancy };
 }
 
 function normalizeDimension(value, fallbackReason = "Evidence not established.") {
@@ -237,9 +306,11 @@ function compensationEvidence(job) {
       .filter((claim) => claimMatchesJobPosting(claim, job)),
   ];
   const description = clean(job?.description);
-  const numericSalaryRange = description.match(/\b(?:total (?:annual )?compensation|total rewards?|on-target earnings|OTE|salary|compensation|base pay|pay range|pays?|hourly rate|wage)\b[^$]{0,100}(?:USD\s*)?\$\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?\s*(?:-|–|—|to)\s*(?:USD\s*)?\$?\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?(?:\s*(?:per|\/|a)?\s*(?:hour|hr|year|yr|annum|annually))?(?:[^.!?]{0,100}\b(?:including|includes)\b[^.!?]{0,80}\b(?:bonus|equity|stock|commission)\b)?/i)?.[0];
+  const numericSalaryRange = description.match(/\b(?:total (?:annual )?compensation|total rewards?|on-target earnings|OTE|salar(?:y|ies)|compensation|base pay|pay range|pays?|hourly rate|wage)\b[^$]{0,140}(?:USD\s*)?\$\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?\s*(?:-|–|—|to)\s*(?:USD\s*)?\$?\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?(?:\s*(?:per|\/|a)?\s*(?:hour|hr|year|yr|annum|annually))?(?:[^.!?]{0,100}\b(?:including|includes)\b[^.!?]{0,80}\b(?:bonus|equity|stock|commission)\b)?/i)?.[0];
+  const locationSalaryRange = description.match(/\b[A-Za-z][A-Za-z .'-]{1,80},\s*[A-Z]{2}:\s*(?:USD\s*)?\$\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?\s*(?:-|–|—|to)\s*(?:USD\s*)?\$?\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?/i)?.[0];
   const salarySentence = numericSalaryRange
-    || description.match(/[^.!?]{0,100}\b(?:salary|compensation|base pay|pay range|pays?|hourly rate|wage)\b[^.!?]{0,220}/i)?.[0];
+    || locationSalaryRange
+    || description.match(/[^.!?]{0,100}\b(?:salar(?:y|ies)|compensation|base pay|pay range|pays?|hourly rate|wage)\b[^.!?]{0,260}/i)?.[0];
   if (salarySentence) candidates.push({ text: salarySentence, sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" });
   candidates.push(...researchEvidence(job).filter((item) => (
     evidenceNamesCompany(item, job?.company)
@@ -340,9 +411,10 @@ export function classifyCodingInterviewRisk(job) {
   };
 
   const ontology = classifyCandidateTitle(title);
-  if (ENGINEERING_TITLE.test(title) && !MANAGEMENT_TITLE.test(title)) return {
+  if ((ENGINEERING_TITLE.test(title) && !MANAGEMENT_TITLE.test(title)) || EXPLICIT_ENGINEERING_IDENTITY.test(description)) return {
     status: "blocked",
     evidenceStatus: "inferred",
+    basis: "deterministic",
     riskLevel: "near_certain",
     suggestedScore: 0,
     reason: "This is an engineering IC archetype in which coding interviews are a near-certain part of the hiring process, even though this posting does not describe the interview stages.",
@@ -351,14 +423,16 @@ export function classifyCodingInterviewRisk(job) {
   if (CODING_BOUND_SCIENCE_IC_TITLE.test(title) && !MANAGEMENT_TITLE.test(title) && !PRODUCT_SCIENCE_EXCEPTION.test(title)) return {
     status: "blocked",
     evidenceStatus: "inferred",
+    basis: "deterministic",
     riskLevel: "near_certain",
     suggestedScore: 0,
     reason: "This individual-contributor scientist archetype is highly likely to require Python, SQL, algorithms, or live model-coding assessment; under the no-coding-round requirement it is treated as a blocker until role-specific contrary evidence is found.",
     sourceUrl: job?.canonicalUrl || "",
   };
-  if (HANDS_ON_IMPLEMENTATION.test(description) || ENGINEERING_TITLE.test(title) || ELEVATED_TECHNICAL_TITLE.test(title)) return {
+  if (HANDS_ON_IMPLEMENTATION.test(description) || TECHNICAL_IMPLEMENTATION_REQUIREMENTS.test(description) || ENGINEERING_TITLE.test(title) || ELEVATED_TECHNICAL_TITLE.test(title)) return {
     status: "unknown",
     evidenceStatus: "inferred",
+    basis: "deterministic",
     riskLevel: "elevated",
     suggestedScore: 2,
     reason: "The title or responsibilities indicate elevated technical-screen risk, but a coding round is not confirmed. Targeted interview-process research is required.",
@@ -367,6 +441,7 @@ export function classifyCodingInterviewRisk(job) {
   if (LEADERSHIP_TITLE.test(title) && LOW_CODING_LEADERSHIP_TITLE.test(title) && ontology.eligible) return {
     status: "unknown",
     evidenceStatus: "inferred",
+    basis: "deterministic",
     riskLevel: "low",
     suggestedScore: 4,
     reason: "The role archetype has low software-coding-interview risk, but the company-specific interview process is not verified.",
@@ -379,6 +454,7 @@ export function classifyCodingInterviewRisk(job) {
     suggestedScore: null,
     reason: "Coding-interview format is not verified and the role archetype is not decisive.",
     sourceUrl: "",
+    basis: "deterministic",
   };
 }
 
@@ -393,6 +469,7 @@ function normalizeGate(value, fallbackReason) {
     sourceUrl: value?.sourceUrl || "",
     riskLevel: value?.riskLevel || null,
     suggestedScore: Number.isFinite(suggestedScore) ? clamp(suggestedScore, 0, 5) : null,
+    basis: value?.basis || "evidence",
   };
 }
 
@@ -425,18 +502,17 @@ function compensationGate(job) {
   });
 }
 
-function expertiseGate(job, dimensions, modelGate) {
+function expertiseGate(job, dimensions, modelGate, constraint) {
   const score = dimensions.expertiseFit.score;
-  const ontology = classifyCandidateTitle(job?.title || "");
   const sourceUrl = job?.canonicalUrl || "";
-  if (ontology.excludedConcepts?.length && !ontology.eligible) {
-    return normalizeGate({ status: "blocked", evidenceStatus: "explicit", reason: "The primary function is an excluded engineering implementation track.", sourceUrl });
+  if (constraint.blocked) {
+    return normalizeGate({ status: "blocked", evidenceStatus: constraint.evidenceStatus, reason: constraint.reason, sourceUrl, basis: "deterministic" });
   }
   if (score !== null && score < 2.5) {
-    return normalizeGate({ status: "blocked", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning, sourceUrl });
+    return normalizeGate({ status: "blocked", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning, sourceUrl, basis: "model" });
   }
   if (score !== null && score >= 3) {
-    return normalizeGate({ status: "met", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning, sourceUrl });
+    return normalizeGate({ status: "met", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning, sourceUrl, basis: "model" });
   }
   if (score !== null) {
     return normalizeGate({
@@ -446,7 +522,7 @@ function expertiseGate(job, dimensions, modelGate) {
       sourceUrl,
     });
   }
-  if (ontology.eligible) {
+  if (classifyCandidateTitle(job?.title || "").eligible) {
     return normalizeGate({ status: "unknown", evidenceStatus: "inferred", reason: "The title passed candidate routing, but responsibility-level expertise fit was not established by the evaluation.", sourceUrl });
   }
   return normalizeGate({ ...modelGate, sourceUrl: modelGate?.sourceUrl || sourceUrl }, "Primary-function fit is not yet established.");
@@ -462,6 +538,9 @@ function applyGateScores(dimensions, gates, compensation) {
   for (const [key, gate] of Object.entries(gateDimension)) {
     if (gate.status === "blocked") updated[key] = { score: 0, evidenceStatus: gate.evidenceStatus, confidence: 1, reasoning: gate.reasoning };
     if (gate.status === "met" && updated[key].score === null) updated[key] = { score: 4, evidenceStatus: gate.evidenceStatus, confidence: gate.evidenceStatus === "explicit" ? 1 : 0.75, reasoning: gate.reasoning };
+    if (["workAuthorization", "compensation"].includes(key) && gate.status === "unknown") {
+      updated[key] = { score: null, evidenceStatus: gate.evidenceStatus, confidence: 0, reasoning: gate.reasoning };
+    }
     if (key === "codingInterviewSafety" && gate.status === "unknown" && gate.suggestedScore !== null) {
       updated[key] = { score: gate.suggestedScore, evidenceStatus: gate.evidenceStatus, confidence: 0.75, reasoning: gate.reasoning };
     }
@@ -498,15 +577,24 @@ function decisionSummary(verdict, dimensions, gates) {
 }
 
 export function finalizeDeepEvaluation(job, modelEvaluation) {
+  const constraint = deterministicExpertiseConstraint(job);
   const dimensions = normalizeDimensions(modelEvaluation?.dimensions || {});
+  if (constraint.blocked && (dimensions.expertiseFit.score === null || dimensions.expertiseFit.score > constraint.maxScore)) {
+    dimensions.expertiseFit = {
+      score: constraint.maxScore,
+      evidenceStatus: constraint.evidenceStatus,
+      confidence: 1,
+      reasoning: constraint.reason,
+    };
+  }
   const modelGates = modelEvaluation?.mustHave || {};
   const compensation = compensationEvidence(job);
-  const workAuthorization = normalizeGate(authorizationEvidence(job), "Work authorization is not verified.");
-  const compensationRequirement = compensationGate(job);
+  const workAuthorization = normalizeGate({ ...authorizationEvidence(job), basis: "deterministic" }, "Work authorization is not verified.");
+  const compensationRequirement = { ...compensationGate(job), basis: "deterministic" };
   const codingEvidence = classifyCodingInterviewRisk(job);
-  const codingInterview = normalizeGate(codingEvidence || modelGates.codingInterview, "Coding-interview format is not verified.");
+  const codingInterview = normalizeGate({ ...(codingEvidence || modelGates.codingInterview), basis: "deterministic" }, "Coding-interview format is not verified.");
   const gates = {
-    expertiseFit: expertiseGate(job, dimensions, modelGates.expertiseFit),
+    expertiseFit: expertiseGate(job, dimensions, modelGates.expertiseFit, constraint),
     workAuthorization,
     compensation: compensationRequirement,
     codingInterview,
@@ -532,6 +620,8 @@ export function finalizeDeepEvaluation(job, modelEvaluation) {
       blockers,
       unknowns,
       provisional: unknowns.length > 0,
+      inputValidation: constraint.vacancy,
+      expertisePolicySignals: constraint.signals,
     },
   };
 }

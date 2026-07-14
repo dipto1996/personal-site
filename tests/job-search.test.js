@@ -94,6 +94,24 @@ test("high-recall triage safety preserves clear unrelated and low-scope rejectio
   assert.equal(tabulation.relevance, "irrelevant");
 });
 
+test("high-recall triage safety rejects non-vacancy pages even when a model calls them relevant", () => {
+  const evaluation = workflow.applyHighRecallTriageSafety({
+    title: "Open Positions - Microsoft Research",
+    canonicalUrl: "https://example.com/open-positions",
+    description: "Filter Results Showing 1 - 10 of 130 results.",
+  }, {
+    roleFamilyId: "analytics_leadership",
+    relevance: "relevant",
+    confidence: 0.9,
+    scopeSummary: "Analytics opportunities.",
+    reasons: [],
+    unknowns: [],
+  });
+  assert.equal(evaluation.relevance, "irrelevant");
+  assert.equal(evaluation.confidence, 1);
+  assert.equal(evaluation.safetyOverride.policy, "invalid_vacancy_v1");
+});
+
 async function sessionContextFor(user) {
   const [workspace] = await workspaces.listWorkspaces(user.id);
   const session = await auth.createSession(user.id, workspace.id);
@@ -2125,6 +2143,51 @@ test("critic agreement is derived from the recommended and primary verdicts", ()
     summary: "The review verdict is supported.",
   }, "maybe");
   assert.equal(normalized.agrees, true);
+});
+
+test("critic cannot overrule a verified deterministic blocker with unknown gates", () => {
+  const job = auditReadyJob();
+  job.details.deepEvaluation.verdict = "pass";
+  job.details.deepEvaluation.mustHave.compensation = {
+    status: "blocked",
+    evidenceStatus: "explicit",
+    reasoning: "Maximum annual base is below $170,000.",
+    sourceUrl: job.canonicalUrl,
+    basis: "deterministic",
+  };
+  const normalized = workflow.normalizeCriticAgreement({
+    agrees: false,
+    recommendedVerdict: "maybe",
+    confidence: 0.8,
+    objections: ["Other gates are unknown."],
+    unsupportedClaims: [],
+    summary: "Manual review.",
+  }, job);
+  assert.equal(normalized.modelRecommendedVerdict, "maybe");
+  assert.equal(normalized.recommendedVerdict, "pass");
+  assert.equal(normalized.agrees, true);
+  assert.match(normalized.policyOverride, /compensation/);
+});
+
+test("evaluation audit detects inconsistent near-duplicate evaluations", () => {
+  const first = auditReadyJob({ id: "duplicate-1", sourceId: "duplicate-source-1" });
+  first.description = Array.from({ length: 10 }, () => "Lead product analytics experimentation customer measurement strategy data products and executive decisions.").join(" ");
+  const second = structuredClone(first);
+  second.id = "duplicate-2";
+  second.sourceId = "duplicate-source-2";
+  second.details.deepEvaluation.verdict = "pass";
+  second.details.deepEvaluation.mustHave.expertiseFit.status = "blocked";
+  second.details.deepEvaluation.dimensions.expertiseFit.score = 2;
+  second.details.deepEvaluation.decision.blockers = ["expertiseFit"];
+  second.details.deepEvaluation.decision.unknowns = ["workAuthorization", "compensation", "codingInterview"];
+  second.details.critic.recommendedVerdict = "pass";
+  second.details.critic.agrees = true;
+  const audit = evaluationAudit.buildEvaluationAudit([first, second], {
+    sampleSize: 20,
+    seed: "duplicate-audit",
+    promptVersion: workflow.PROMPT_VERSION,
+  });
+  assert.equal(audit.population.anomaliesByCode.duplicate_evaluation_inconsistency, 2);
 });
 
 test("model confidence accepts fractions, five-point scores, and percentages", () => {

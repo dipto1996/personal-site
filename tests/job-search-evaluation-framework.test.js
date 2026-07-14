@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   EVALUATION_WEIGHTS,
   classifyCodingInterviewRisk,
+  classifyVacancyIntegrity,
   finalizeDeepEvaluation,
   parseAnnualCompensation,
 } from "../server/job-search/evaluation-framework.js";
@@ -112,8 +113,83 @@ test("a compensation range spanning the minimum stays under review", () => {
   }));
 
   assert.equal(result.mustHave.compensation.status, "unknown");
+  assert.equal(result.dimensions.compensation.score, null);
   assert.equal(result.verdict, "maybe");
   assert.match(result.mustHave.compensation.reasoning, /spans the \$170,000 threshold/i);
+});
+
+test("Capital One-style annual salaries and job-level sponsorship language satisfy both gates", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director, Data Analytics - Global Payment Network",
+    company: "Capital One",
+    location: "Plano, TX",
+    canonicalUrl: "https://example.com/capital-one-role",
+    description: "Lead data analytics and manage a team. Capital One will consider sponsoring a new qualified applicant for employment authorization for this position. The minimum and maximum full-time annual salaries are listed by location. Plano, TX: $209,500 - $239,100 for Director, Data Analysis.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  }, modelEvaluation({ expertiseFit: dimension(5, "Direct analytics leadership match.") }));
+
+  assert.equal(result.mustHave.workAuthorization.status, "met");
+  assert.equal(result.mustHave.compensation.status, "met");
+  assert.equal(result.dimensions.compensation.score, 5);
+});
+
+test("career landing pages, multi-role result pages, and articles are not specific vacancies", () => {
+  const fixtures = [
+    {
+      title: "Artificial Intelligence (AI) and Data Science Jobs | Accenture",
+      canonicalUrl: "https://example.com/careers/ai-data-science",
+      description: "Explore AI and data science careers and jobs.",
+    },
+    {
+      title: "Open Positions - Microsoft Research",
+      canonicalUrl: "https://example.com/open-positions",
+      description: "Filter Results Showing 1 - 10 of 130 results. Career Opportunity One. Career Opportunity Two.",
+    },
+    {
+      title: "How to Get a Software Engineering Job in the AI Era",
+      canonicalUrl: "https://www.businessinsider.com/software-engineering-job-ai",
+      description: "An article about hiring trends and interviews.",
+    },
+  ];
+  for (const fixture of fixtures) {
+    const job = { company: "Example", details: { sourceEvidence: [], claims: [], research: { results: [] } }, ...fixture };
+    assert.equal(classifyVacancyIntegrity(job).status, "blocked", fixture.title);
+    const result = finalizeDeepEvaluation(job, modelEvaluation({ expertiseFit: dimension(5, "Model guessed a strong fit.") }));
+    assert.equal(result.verdict, "pass", fixture.title);
+    assert.equal(result.mustHave.expertiseFit.basis, "deterministic", fixture.title);
+    assert.equal(result.dimensions.expertiseFit.score, 0, fixture.title);
+  }
+});
+
+test("job-body engineering identity overrides a strategy-sounding title", () => {
+  const job = {
+    title: "AI Transformation Lead",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "Who You Are: You are an experienced AI & Automation Engineer. Develop and deploy machine learning models, integrate APIs, build data pipelines, and use Python in production.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  };
+  const result = finalizeDeepEvaluation(job, modelEvaluation({ expertiseFit: dimension(4, "The title sounds strategic.") }));
+  assert.equal(result.mustHave.expertiseFit.status, "blocked");
+  assert.equal(result.mustHave.expertiseFit.basis, "deterministic");
+  assert.equal(result.mustHave.codingInterview.status, "blocked");
+  assert.equal(result.verdict, "pass");
+});
+
+test("several explicit healthcare specialist gaps produce a consistent expertise blocker", () => {
+  const job = {
+    title: "Manager Advanced Analytics",
+    company: "Rush",
+    canonicalUrl: "https://example.com/job",
+    description: "Required Job Qualifications: Five years of health insurance claims data. Two years of EMR data. Expert with ICD-10, CPT, NDC, and DRG medical codes. Near expert with HL7. Experience on payer and provider sides for contract negotiations. Lead advanced analytics and supervise analysts.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  };
+  for (const modelScore of [2, 3, 4]) {
+    const result = finalizeDeepEvaluation(job, modelEvaluation({ expertiseFit: dimension(modelScore, "Transferable analytics leadership.") }));
+    assert.equal(result.mustHave.expertiseFit.status, "blocked", String(modelScore));
+    assert.equal(result.mustHave.expertiseFit.basis, "deterministic", String(modelScore));
+    assert.equal(result.dimensions.expertiseFit.score, 2, String(modelScore));
+  }
 });
 
 test("annual compensation parser handles decimal salary ranges without treating them as hourly", () => {

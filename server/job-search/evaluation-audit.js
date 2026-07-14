@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { EVALUATION_FRAMEWORK_VERSION } from "./evaluation-framework.js";
+import { EVALUATION_FRAMEWORK_VERSION, classifyVacancyIntegrity } from "./evaluation-framework.js";
 
 const GATE_DIMENSIONS = Object.freeze({
   expertiseFit: "expertiseFit",
@@ -66,6 +66,10 @@ export function auditJobEvaluation(job, { promptVersion } = {}) {
   }
 
   const gates = deep.mustHave || {};
+  const vacancy = classifyVacancyIntegrity(job);
+  if (vacancy.status === "blocked" && deep.decision?.inputValidation?.status !== "blocked") {
+    addFinding(findings, "non_vacancy_scored_as_job", vacancy.reason);
+  }
   const blockers = Object.entries(gates).filter(([, gate]) => gate?.status === "blocked").map(([key]) => key);
   const unknowns = Object.entries(gates).filter(([, gate]) => gate?.status === "unknown").map(([key]) => key);
   const expectedVerdict = blockers.length ? "pass" : unknowns.length ? "maybe" : Number(deep.overallScore) >= 65 ? "apply" : "maybe";
@@ -91,6 +95,9 @@ export function auditJobEvaluation(job, { promptVersion } = {}) {
     }
     if (gate.status === "unknown" && dimension?.evidenceStatus === "unknown" && dimension?.score !== null) {
       addFinding(findings, "unknown_scored_as_fact", `${dimensionName} has a numeric score despite unknown evidence.`);
+    }
+    if (["workAuthorization", "compensation"].includes(gateName) && gate.status === "unknown" && dimension?.score !== null) {
+      addFinding(findings, "unknown_gate_has_numeric_score", `${dimensionName} has a numeric score even though its must-have gate is unknown.`);
     }
     if (gate.status === "blocked" && dimension && dimension.score !== 0 && gateName !== "expertiseFit") {
       addFinding(findings, "blocked_gate_score_mismatch", `${dimensionName} is blocked but does not have score 0.`);
@@ -130,9 +137,42 @@ export function auditJobEvaluation(job, { promptVersion } = {}) {
     if (criticAgrees && critic.recommendedVerdict === "pass" && blockers.length === 0) {
       addFinding(findings, "unsupported_agreed_pass", "Evaluator and critic agree on pass without a finalized must-have blocker.");
     }
+    const deterministicBlockers = Object.entries(gates)
+      .filter(([, gate]) => gate?.status === "blocked" && gate?.basis === "deterministic")
+      .map(([key]) => key);
+    if (deterministicBlockers.length && critic.recommendedVerdict !== "pass") {
+      addFinding(findings, "critic_overrode_deterministic_blocker", `Critic recommendation ignored verified blocker(s): ${deterministicBlockers.join(", ")}.`);
+    }
   }
 
   return findings;
+}
+
+function duplicateSignature(job) {
+  const tokens = String(job?.description || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).slice(0, 220);
+  if (tokens.length < 80) return "";
+  return createHash("sha256").update(tokens.join(" ")).digest("hex");
+}
+
+function addDuplicateConsistencyFindings(audited) {
+  const groups = new Map();
+  for (const item of audited) {
+    const signature = duplicateSignature(item.job);
+    if (!signature) continue;
+    if (!groups.has(signature)) groups.set(signature, []);
+    groups.get(signature).push(item);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const expertiseStatuses = new Set(group.map(({ job }) => job.details?.deepEvaluation?.mustHave?.expertiseFit?.status || "missing"));
+    const verdicts = new Set(group.map(({ job }) => job.details?.deepEvaluation?.verdict || "missing"));
+    const expertiseScores = group.map(({ job }) => Number(job.details?.deepEvaluation?.dimensions?.expertiseFit?.score)).filter(Number.isFinite);
+    const scoreSpread = expertiseScores.length ? Math.max(...expertiseScores) - Math.min(...expertiseScores) : 0;
+    if (expertiseStatuses.size === 1 && verdicts.size === 1 && scoreSpread < 0.75) continue;
+    for (const item of group) {
+      addFinding(item.findings, "duplicate_evaluation_inconsistency", "Near-identical postings received materially different expertise gates, scores, or verdicts.");
+    }
+  }
 }
 
 function sampleRank(seed, jobId) {
@@ -142,6 +182,7 @@ function sampleRank(seed, jobId) {
 export function buildEvaluationAudit(jobs, { sampleSize = 20, seed = new Date().toISOString().slice(0, 10), promptVersion } = {}) {
   const candidates = jobs.filter((job) => job?.sourceProvider !== "sample");
   const audited = candidates.map((job) => ({ job, findings: auditJobEvaluation(job, { promptVersion }) }));
+  addDuplicateConsistencyFindings(audited);
   const completed = audited.filter(({ job }) => (
     job.details?.deepStatus === "complete"
       && job.details?.evaluationFrameworkVersion === EVALUATION_FRAMEWORK_VERSION

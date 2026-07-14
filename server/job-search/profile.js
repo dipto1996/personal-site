@@ -3,7 +3,7 @@ import { parseCsv } from "./utils.js";
 export const DEFAULT_OWNER_EMAILS = ["roydiptopal1996@gmail.com"];
 
 export const TARGET_PROFILE = {
-  version: "2026-07-14-analytics-first-v2",
+  version: "2026-07-14-analytics-first-v3",
   headline: "Analytics, experimentation, product analytics, and data science leader; AI product founder",
   baseline:
     process.env.JOBSEARCH_CANDIDATE_BASELINE
@@ -34,7 +34,7 @@ export const TARGET_PROFILE = {
     expertiseFit: "Primary responsibilities must substantially match the candidate's demonstrated analytics, experimentation, product analytics, marketing/customer data science, strategy analytics, data-product, or product-builder experience.",
     workAuthorization: "The role must be compatible with F-1 OPT/STEM OPT and credible future sponsorship. Explicit incompatibility is a blocker; missing evidence requires review.",
     compensation: "The listed or credibly researched annual base must reach USD 170,000. A confirmed maximum below USD 170,000 is a blocker; missing evidence requires review.",
-    codingInterview: "The hiring process must not require software-engineering-style coding, algorithms, data structures, or LeetCode interviews. Explicit coding rounds are blockers; missing interview evidence requires review or a clearly labelled inference.",
+    codingInterview: "The hiring process must not require software-engineering-style coding, algorithms, data structures, LeetCode, or role-specific SQL/Python coding assessments. Explicit coding rounds are blockers. Engineering and coding-bound scientist IC archetypes are treated as near-certain blockers unless role-specific contrary evidence exists. Product/decision-science and data-science-management roles have elevated but unconfirmed risk and require review; analytics/strategy leadership has lower inferred risk but remains unverified until the company process is established.",
   },
   rankingWeights: {
     expertiseFit: 35,

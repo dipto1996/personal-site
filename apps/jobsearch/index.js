@@ -184,7 +184,7 @@ function renderMustHaves(job) {
       return `<article class="job-gate-result job-gate-result--${escapeHtml(gate.status || "unknown")}">
         <div><span>${escapeHtml(GATE_LABELS[name] || statusLabel(name))}</span><strong>${escapeHtml(gate.status || "unknown")}</strong></div>
         <p>${escapeHtml(gate.reasoning || "Evidence has not been established.")}</p>
-        <small>${escapeHtml(gate.evidenceStatus || "unknown")} evidence${sourceUrl ? ` &middot; <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">Source</a>` : ""}</small>
+        <small>${escapeHtml(gate.evidenceStatus || "unknown")} evidence${gate.riskLevel ? ` &middot; ${escapeHtml(statusLabel(gate.riskLevel))} role risk` : ""}${sourceUrl ? ` &middot; <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">Source</a>` : ""}</small>
       </article>`;
     }).join("")}</div></section>`;
 }
@@ -300,6 +300,7 @@ function renderTaxonomy(taxonomy = {}) {
   const entries = [...proposed, ...active];
   const totals = taxonomy.totals || {};
   return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Title intelligence</p><h2>Title rules</h2></div><span>${Number(totals.proposed || 0)} awaiting review &middot; ${Number(totals.active || 0)} active</span></div>
+    <p class="job-muted"><strong>Candidate routing:</strong> (target function AND target seniority) OR specialist exception OR at least two distinct target functions. Engineering IC exclusions are applied first, with a leadership override for eligible analytics, science, product, strategy, platform, or architecture management.</p>
     <div class="job-taxonomy-list">${entries.length ? entries.map((pattern) => `<article><div><strong>${escapeHtml(pattern.expression)}</strong><span>${escapeHtml(pattern.familyLabel)} &middot; ${escapeHtml(pattern.matchType)} &middot; ${escapeHtml(pattern.status)}</span></div><p>${escapeHtml(pattern.metrics?.rationale || "Curated title alias")}</p><div>${pattern.status === "proposed" ? `<button class="verify-inline-button" data-taxonomy-action="approve" data-pattern-id="${escapeHtml(pattern.id)}">Approve</button><button class="verify-inline-button" data-taxonomy-action="reject" data-pattern-id="${escapeHtml(pattern.id)}">Reject</button>` : pattern.version > 1 ? `<button class="verify-inline-button" data-taxonomy-action="rollback" data-pattern-id="${escapeHtml(pattern.id)}">Rollback</button>` : ""}</div></article>`).join("") : `<p class="verify-note">No title rules on this page.</p>`}</div>
   </section>`;
 }

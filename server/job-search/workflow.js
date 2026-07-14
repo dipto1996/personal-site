@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import { fetchConfiguredAtsJobs, fetchKnownCompanyAtsJobs, validateDiscoveryCandidates } from "./ats.js";
 import { buildSearchPlan, getManualDiscoveryUrls } from "./discovery.js";
 import { TARGET_PROFILE } from "./profile.js";
-import { EVALUATION_FRAMEWORK_VERSION, finalizeDeepEvaluation } from "./evaluation-framework.js";
+import {
+  EVALUATION_FRAMEWORK_VERSION,
+  classifyCodingInterviewRisk,
+  finalizeDeepEvaluation,
+} from "./evaluation-framework.js";
 import {
   callCriticModel,
   callDeepModel,
@@ -67,7 +71,9 @@ import { normalizeTimestampInput } from "./utils.js";
 import { rotatingWatchlistCompanies } from "./watchlist.js";
 import { parseWorkerOutput } from "./worker-contract.js";
 
-export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v2";
+export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v3";
+
+const INTERVIEW_RISK_INSTRUCTIONS = "Infer interview risk from the role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work do not alone prove a coding round.";
 
 function hash(...parts) {
   return createHash("sha256").update(parts.join("|")).digest("hex");
@@ -521,12 +527,16 @@ async function triageJobs(jobs, runId) {
 }
 
 async function researchJob(job, runId) {
-  const cacheKey = hash("company-role-research-v4", job.company, job.normalizedTitle || job.title);
+  const cacheKey = hash("company-role-research-v5", job.company, job.normalizedTitle || job.title);
   const cached = await readResearchCache(cacheKey);
   if (cached) return cached;
   const cleanTitle = String(job.title || "").replace(/[^a-z0-9&,+/() -]+/gi, " ").replace(/\s+/g, " ").trim();
+  const codingRisk = classifyCodingInterviewRisk(job);
+  const interviewTerms = ["near_certain", "elevated"].includes(codingRisk.riskLevel)
+    ? " OR \"coding interview\" OR \"live coding\" OR \"SQL assessment\" OR \"Python assessment\" OR \"technical screen\" OR \"interview process\""
+    : "";
   const queries = [
-    `"${job.company}" "${cleanTitle}" (salary OR compensation OR "pay range" OR sponsorship OR "work authorization" OR "coding interview" OR "interview process")`,
+    `"${job.company}" "${cleanTitle}" (salary OR compensation OR "pay range" OR sponsorship OR "work authorization"${interviewTerms})`,
     `"${job.company}" ("STEM OPT" OR "F-1 OPT" OR "E-Verify" OR H-1B OR LCA) (site:e-verify.gov OR site:dol.gov OR site:uscis.gov OR site:dhs.gov)`,
   ];
   const results = [];
@@ -664,7 +674,7 @@ function deepMessages(job, research, examples) {
     },
     {
       role: "user",
-      content: `Candidate:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nFour must-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nTarget geography: ${TARGET_PROFILE.targetGeography}\nCompensation: ${TARGET_PROFILE.compensation}\nWork authorization: ${TARGET_PROFILE.workAuthorization}\nAvoid: ${TARGET_PROFILE.avoid}\nRanking weights: ${JSON.stringify(TARGET_PROFILE.rankingWeights)}\n\nJob:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 12000), structuredCompensation: job.details?.sourceMetadata?.compensation || "" }, null, 2)}\n\nWeb evidence:\n${JSON.stringify(compactResearch, null, 2)}\n\nPrior owner feedback in this role family:\n${JSON.stringify(examples.slice(0, 8), null, 2)}\n\nEvaluate the four must-have gates first. status=blocked requires supported incompatibility; status=unknown means missing evidence; status=met requires support. Then score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null and evidenceStatus=unknown when evidence is missing; unknown is never 0. codingInterviewSafety 5 means low/no coding-interview risk and 0 means explicit high risk. interviewVelocity concerns process speed only. leadershipScope concerns responsibility only. Public-sector or non-financial-services context cannot reduce expertise fit or leadership scope when responsibilities match. AI/ML adjacency, financial-services overlap, and remote flexibility are bonuses, not prerequisites. US on-site/hybrid is acceptable when authorization is compatible. A primarily engineering-implementation role is a function blocker, but Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work are not. Missing compensation, visa, or interview evidence produces unknown and normally maybe, never pass by itself. Explicit no-current-or-future sponsorship, citizenship/clearance, a confirmed salary maximum below $170,000, or explicit software-engineering coding interviews are blockers. Return a model recommendation; deterministic gates and weights produce the final verdict. Cite every explicit or inferred claim. Omit unsupported claims and preserve unknowns.`
+      content: `Candidate:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nFour must-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nTarget geography: ${TARGET_PROFILE.targetGeography}\nCompensation: ${TARGET_PROFILE.compensation}\nWork authorization: ${TARGET_PROFILE.workAuthorization}\nAvoid: ${TARGET_PROFILE.avoid}\nRanking weights: ${JSON.stringify(TARGET_PROFILE.rankingWeights)}\n\nJob:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 12000), structuredCompensation: job.details?.sourceMetadata?.compensation || "" }, null, 2)}\n\nWeb evidence:\n${JSON.stringify(compactResearch, null, 2)}\n\nPrior owner feedback in this role family:\n${JSON.stringify(examples.slice(0, 8), null, 2)}\n\nEvaluate the four must-have gates first. status=blocked requires supported incompatibility; status=unknown means missing evidence; status=met requires support. Then score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null and evidenceStatus=unknown when evidence is missing; unknown is never 0. codingInterviewSafety 5 means low/no coding-interview risk and 0 means explicit high risk. interviewVelocity concerns process speed only. leadershipScope concerns responsibility only. Public-sector or non-financial-services context cannot reduce expertise fit or leadership scope when responsibilities match. AI/ML adjacency, financial-services overlap, and remote flexibility are bonuses, not prerequisites. US on-site/hybrid is acceptable when authorization is compatible. ${INTERVIEW_RISK_INSTRUCTIONS} A primarily engineering-implementation role is a function blocker. Missing compensation, visa, or interview evidence produces unknown and normally maybe, never pass by itself. Explicit no-current-or-future sponsorship, citizenship/clearance, a confirmed salary maximum below $170,000, or explicit coding interviews are blockers. Return a model recommendation; deterministic gates and weights produce the final verdict. Cite every explicit or inferred claim. Omit unsupported claims and preserve unknowns.`
     },
   ];
 }
@@ -745,7 +755,7 @@ function criticMessages(job) {
   }));
   return [
     { role: "system", content: "Act as an independent skeptical career strategist. Return JSON only and use only supplied evidence. Prefer correcting an optimistic verdict over preserving model agreement." },
-    { role: "user", content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nMust-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nJob and primary evaluation:\n${JSON.stringify({ title: job.title, company: job.company, description: job.description.slice(0, 8000), primary: job.details?.deepEvaluation, evidence }, null, 2)}\n\nChallenge unsupported gate statuses, contradictions, hidden coding-interview risk, salary interpretation, and work-authorization evidence. Do not treat public-sector context, lack of AI, lack of financial-services overlap, or lack of remote work as a core mismatch when responsibilities fit analytics or experimentation. Missing facts remain unknown and should normally produce maybe unless another gate is explicitly blocked. Return agrees, recommendedVerdict, confidence, objections, unsupportedClaims, summary under 100 words.` },
+    { role: "user", content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nMust-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nJob and primary evaluation:\n${JSON.stringify({ title: job.title, company: job.company, description: job.description.slice(0, 8000), primary: job.details?.deepEvaluation, evidence }, null, 2)}\n\nChallenge unsupported gate statuses, contradictions, hidden coding-interview risk, role-archetype risk classification, salary interpretation, and work-authorization evidence. Engineering and coding-bound scientist IC roles are near-certain coding risks absent contrary role-specific evidence; product/decision science and data-science management are elevated but not automatically blocked. Do not treat public-sector context, lack of AI, lack of financial-services overlap, or lack of remote work as a core mismatch when responsibilities fit analytics or experimentation. Missing facts remain unknown and should normally produce maybe unless another gate is explicitly blocked. Return agrees, recommendedVerdict, confidence, objections, unsupportedClaims, summary under 100 words.` },
   ];
 }
 

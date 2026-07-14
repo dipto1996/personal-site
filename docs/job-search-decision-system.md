@@ -1,6 +1,6 @@
 # Job Search Decision System
 
-Version: `2026-07-14-analytics-first-v2`
+Version: `2026-07-14-analytics-first-v3`
 
 This is the auditable specification for discovery, title routing, LLM prompts, deterministic gates, and ranking. The executable definitions remain the source of truth in `server/job-search/profile.js`, `server/job-search/title-ontology.js`, `server/job-search/worker-contract.js`, and `server/job-search/evaluation-framework.js`.
 
@@ -34,7 +34,17 @@ Discovery uses eight Google Jobs search shards each day, split across the mornin
 
 There are no negative Google-search terms.
 
-After discovery, a title is a standard candidate only when both conditions are true:
+The exact routing formula is:
+
+```text
+(target function AND target seniority)
+OR specialist exception
+OR at least two distinct target functions
+```
+
+The engineering-IC exclusion is applied first, except when eligible management seniority and analytics/science/product/strategy/platform/architecture function evidence create a leadership override.
+
+For the standard lane, both conditions are true:
 
 - **Function:** at least one target function concept matches.
 - **Seniority:** manager, director, head, VP/chief/GM, lead, senior/principal/staff, advisor/consultant, or operator matches.
@@ -52,7 +62,7 @@ The server, not the LLM, owns the final gate decision.
 | Expertise | Responsibilities substantially match the demonstrated core | Primary function is clearly outside the core | Responsibilities are incomplete or ambiguous |
 | Work authorization | Explicit OPT/sponsorship support, or credible employer-level government/E-Verify evidence without a job-level contradiction | Explicit no current/future sponsorship, citizenship, or clearance restriction | Compatibility is not verified |
 | Compensation | Confirmed annual base range starts at $170,000 or more | Confirmed maximum is below $170,000 | No reliable range, or a range spanning the $170,000 threshold |
-| Coding interview | Evidence supports no software-engineering coding round | Explicit live coding, algorithms/data structures, LeetCode, or engineering coding assessment | Interview format is not verified |
+| Coding interview | Role-specific evidence supports no coding round | Explicit live coding/SQL/Python assessment, algorithms/data structures, or LeetCode; engineering and coding-bound scientist IC archetypes are near-certain blockers unless contrary role-specific evidence exists | Product/decision science, data-science management, and technical leadership are elevated but unconfirmed; analytics/strategy leadership is lower risk but still unverified |
 
 Any confirmed blocker produces `pass`. Any unknown gate with no blocker produces `maybe` / review. `apply` is possible only when all four gates are supported and the weighted score is at least 65.
 
@@ -138,7 +148,7 @@ Job: {job}
 Validated evidence extraction: {extraction}
 Prior owner feedback: {feedbackExamples}
 
-Evaluate the four must-have gates first. blocked requires supported incompatibility, unknown means missing evidence, and met requires support. Score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null for unknown evidence; never convert unknown to 0. codingInterviewSafety 5 means low/no coding-interview risk. interviewVelocity concerns process speed only. leadershipScope concerns responsibility only. Public-sector or non-financial-services work cannot reduce expertise fit or leadership scope when responsibilities match. AI/ML, financial-services, and remote are bonuses. US on-site/hybrid is acceptable when authorization is compatible. Engineering implementation can block; Python, SQL, statistics, predictive modeling, experimentation, and model development within analytics/data-science work do not. Missing compensation, visa, or interview evidence means maybe, not pass. Explicit no-current-or-future sponsorship, citizenship/clearance, salary maximum below $170,000, or explicit software-engineering coding interviews are blockers. The server applies final gates and weights. Cite every non-unknown claim.
+Evaluate the four must-have gates first. blocked requires supported incompatibility, unknown means missing evidence, and met requires support. Score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null for unknown evidence; never convert unknown to 0. codingInterviewSafety 5 means low/no coding-interview risk. interviewVelocity concerns process speed only. leadershipScope concerns responsibility only. Public-sector or non-financial-services work cannot reduce expertise fit or leadership scope when responsibilities match. AI/ML, financial-services, and remote are bonuses. US on-site/hybrid is acceptable when authorization is compatible. Infer interview risk from role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, experimentation, and model development within analytics/data-science work do not alone prove a coding round. Missing compensation, visa, or interview evidence means maybe, not pass. Explicit no-current-or-future sponsorship, citizenship/clearance, salary maximum below $170,000, or explicit coding interviews are blockers. The server applies final gates and weights. Cite every non-unknown claim.
 ```
 
 ### 4. Critic
@@ -157,7 +167,7 @@ Core expertise: {coreExpertise}
 Four must-have gates: {hardRequirements}
 Job, primary evaluation, and evidence: {jobAndEvaluation}
 
-Challenge unsupported gate statuses, contradictions, hidden coding-interview risk, salary interpretation, and work-authorization evidence. Do not treat industry mismatch, lack of AI, lack of remote work, or public-sector context as a core role-fit failure when responsibilities match. apply means pursue, maybe means manual review, and pass means reject. Missing facts remain unknown and normally cause maybe unless another must-have gate is explicitly blocked.
+Challenge unsupported gate statuses, contradictions, hidden coding-interview risk, role-archetype risk classification, salary interpretation, and work-authorization evidence. Engineering and coding-bound scientist IC roles are near-certain coding risks absent contrary role-specific evidence; product/decision science and data-science management are elevated but not automatically blocked. Do not treat industry mismatch, lack of AI, lack of remote work, or public-sector context as a core role-fit failure when responsibilities match. apply means pursue, maybe means manual review, and pass means reject. Missing facts remain unknown and normally cause maybe unless another must-have gate is explicitly blocked.
 ```
 
 ### 5. Outreach

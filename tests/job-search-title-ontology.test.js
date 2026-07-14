@@ -46,6 +46,13 @@ test("specialist target roles do not require a management word", () => {
   }
 });
 
+test("candidate routing implements function-and-seniority, specialist, and multi-function lanes", () => {
+  assert.equal(classifyCandidateTitle("Senior Analytics Manager").lane, "function_and_seniority");
+  assert.equal(classifyCandidateTitle("Product Scientist").lane, "specialist_exception");
+  assert.equal(classifyCandidateTitle("Analytics and Data Strategy").lane, "multi_function_exploratory");
+  assert.equal(classifyCandidateTitle("Analytics Specialist").eligible, false);
+});
+
 test("normalization handles morphology and common seniority abbreviations", () => {
   assert.equal(normalizeIntelligenceTitle("Sr. Director, Advanced Analytic & AI Products"), "senior director advanced analytics and ai product");
   assert.equal(classifyCandidateTitle("VP, Data Scientists and Analytics").eligible, true);

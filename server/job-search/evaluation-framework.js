@@ -1,7 +1,7 @@
 import { TARGET_PROFILE } from "./profile.js";
 import { classifyCandidateTitle } from "./title-ontology.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v2";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v3";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 
@@ -32,9 +32,16 @@ const CITIZENSHIP_BLOCK = /\b(?:u\.?s\.? citizen(?:ship)? required|must be (?:a 
 const SPONSORSHIP_AVAILABLE = /\b(?:visa sponsorship (?:is )?available|sponsorship available|will (?:provide|offer) (?:visa )?sponsorship|we sponsor|eligible for sponsorship|F-1 OPT|STEM OPT|CPT)\b/i;
 const EVERIFY_HISTORY = /\bE-Verify\b/i;
 const SPONSORSHIP_HISTORY = /\b(?:H-1B employer data|H-1B petitions?|certified LCA|LCA disclosure)\b/i;
-const CODING_INTERVIEW_BLOCK = /\b(?:leetcode|data structures and algorithms|algorithms and data structures|live coding|coding (?:challenge|screen|assessment|interview|round))\b/i;
-const NO_CODING_INTERVIEW = /\b(?:no|without) (?:live )?coding\b|\bno (?:leetcode|coding (?:challenge|screen|assessment|interview|round))\b/i;
+const CODING_INTERVIEW_BLOCK = /\b(?:leetcode|data structures and algorithms|algorithms and data structures|live coding|take-home coding|coding (?:challenge|exercise|screen|assessment|interview|round)|(?:sql|python|r) (?:coding )?(?:test|exercise|challenge|screen|assessment|interview))\b/i;
+const NO_CODING_INTERVIEW = /\b(?:no|without) (?:live )?coding\b|\bno (?:leetcode|coding (?:challenge|exercise|screen|assessment|interview|round))\b/i;
 const ENGINEERING_TITLE = /\b(?:software|backend|front[ -]?end|full[ -]?stack|infrastructure|site reliability|data|analytics|machine learning|ml) engineer(?:ing)?\b|\bdeveloper\b/i;
+const MANAGEMENT_TITLE = /\b(?:manager|director|head|chief|vice president|vp|general manager)\b/i;
+const CODING_BOUND_SCIENCE_IC_TITLE = /\b(?:data scientist|applied scientist|research scientist|machine learning scientist|ml scientist|quantitative researcher|quantitative developer)\b/i;
+const PRODUCT_SCIENCE_EXCEPTION = /\b(?:product scientist|product data scientist|decision scientist)\b/i;
+const LEADERSHIP_TITLE = /\b(?:manager|director|head|chief|vice president|vp|general manager|lead)\b/i;
+const ELEVATED_TECHNICAL_TITLE = /\b(?:product scientist|product data scientist|decision scientist|experimentation scientist|measurement scientist|marketing scientist|data science (?:manager|director|lead|head)|(?:manager|director|head)[^a-z0-9]{0,3}(?:of )?data science|product analytics (?:manager|lead)|experimentation (?:manager|lead)|(?:senior|principal|staff) (?:data|product|marketing|growth|business) analyst)\b/i;
+const LOW_CODING_LEADERSHIP_TITLE = /\b(?:analytics|data analysis|insights|business intelligence|strategy|data product|product manager|product management|program manager|business manager|chief of staff|governance|risk|operations)\b/i;
+const HANDS_ON_IMPLEMENTATION = /\bhands-on\b[^.]{0,100}\b(?:coding|python|sql|software development|model development|machine learning engineering)\b|\b(?:write|develop|deploy|maintain|productionize)\b[^.]{0,100}\b(?:production code|software services|machine learning models|ml models)\b/i;
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -128,6 +135,16 @@ function evidenceNamesCompany(item, company) {
   return tokens.length === 1 ? text.includes(tokens[0]) : tokens.filter((token) => text.includes(token)).length >= Math.min(2, tokens.length);
 }
 
+function evidenceNamesRole(item, title) {
+  const ignored = new Set(["senior", "sr", "principal", "staff", "lead", "manager", "director", "head", "chief", "the", "and", "of"]);
+  const tokens = clean(title).toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)
+    .filter((token) => token.length >= 3 && !ignored.has(token));
+  if (!tokens.length) return false;
+  const text = clean(item?.text).toLowerCase().replace(/[^a-z0-9 ]+/g, " ");
+  const required = Math.min(2, tokens.length);
+  return tokens.filter((token) => text.includes(token)).length >= required;
+}
+
 function officialEligibilitySource(url) {
   try {
     const host = new URL(url).hostname.toLowerCase();
@@ -198,27 +215,88 @@ function authorizationEvidence(job) {
   return { status: "unknown", evidenceStatus: "unknown", reason: "F-1 OPT/STEM OPT and future sponsorship compatibility are not yet verified.", sourceUrl: "" };
 }
 
-function deterministicCodingEvidence(job) {
-  const text = clean(`${job?.title || ""} ${job?.description || ""}`);
-  if (CODING_INTERVIEW_BLOCK.test(text) && !NO_CODING_INTERVIEW.test(text)) {
-    return { status: "blocked", evidenceStatus: "explicit", reason: "The supplied job evidence explicitly mentions a coding, algorithms, or LeetCode-style interview." };
-  }
-  if (NO_CODING_INTERVIEW.test(text)) {
-    return { status: "met", evidenceStatus: "explicit", reason: "The supplied evidence explicitly states that no coding interview is required." };
-  }
-  const ontology = classifyCandidateTitle(job?.title || "");
-  if (ENGINEERING_TITLE.test(job?.title || "") && ontology.excludedConcepts?.length && !ontology.eligible) {
-    return { status: "blocked", evidenceStatus: "explicit", reason: "The title is primarily an engineering implementation role with high coding-interview risk." };
-  }
-  return null;
+export function classifyCodingInterviewRisk(job) {
+  const title = clean(job?.title);
+  const description = clean(job?.description);
+  const posting = { text: description, sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" };
+  const claims = relevantClaims(job, /(coding|interview|assessment|technical_screen|sql_test|python_test)/i);
+  const researched = researchEvidence(job).filter((item) => (
+    evidenceNamesCompany(item, job?.company) && evidenceNamesRole(item, title)
+  ));
+  const evidence = [posting, ...claims, ...researched];
+  const explicitBlocker = evidence.find((item) => CODING_INTERVIEW_BLOCK.test(item.text) && !NO_CODING_INTERVIEW.test(item.text));
+  if (explicitBlocker) return {
+    status: "blocked",
+    evidenceStatus: explicitBlocker.evidenceType,
+    riskLevel: "confirmed",
+    suggestedScore: 0,
+    reason: "Role-specific evidence identifies a live coding, SQL/Python coding, algorithms, or LeetCode-style assessment.",
+    sourceUrl: explicitBlocker.sourceUrl,
+  };
+  const explicitSafe = evidence.find((item) => NO_CODING_INTERVIEW.test(item.text));
+  if (explicitSafe) return {
+    status: "met",
+    evidenceStatus: explicitSafe.evidenceType,
+    riskLevel: "low",
+    suggestedScore: 5,
+    reason: "Role-specific evidence states that no coding interview is required.",
+    sourceUrl: explicitSafe.sourceUrl,
+  };
+
+  const ontology = classifyCandidateTitle(title);
+  if (ENGINEERING_TITLE.test(title) && !MANAGEMENT_TITLE.test(title)) return {
+    status: "blocked",
+    evidenceStatus: "inferred",
+    riskLevel: "near_certain",
+    suggestedScore: 0,
+    reason: "This is an engineering IC archetype in which coding interviews are a near-certain part of the hiring process, even though this posting does not describe the interview stages.",
+    sourceUrl: job?.canonicalUrl || "",
+  };
+  if (CODING_BOUND_SCIENCE_IC_TITLE.test(title) && !MANAGEMENT_TITLE.test(title) && !PRODUCT_SCIENCE_EXCEPTION.test(title)) return {
+    status: "blocked",
+    evidenceStatus: "inferred",
+    riskLevel: "near_certain",
+    suggestedScore: 0,
+    reason: "This individual-contributor scientist archetype is highly likely to require Python, SQL, algorithms, or live model-coding assessment; under the no-coding-round requirement it is treated as a blocker until role-specific contrary evidence is found.",
+    sourceUrl: job?.canonicalUrl || "",
+  };
+  if (HANDS_ON_IMPLEMENTATION.test(description) || ENGINEERING_TITLE.test(title) || ELEVATED_TECHNICAL_TITLE.test(title)) return {
+    status: "unknown",
+    evidenceStatus: "inferred",
+    riskLevel: "elevated",
+    suggestedScore: 2,
+    reason: "The title or responsibilities indicate elevated technical-screen risk, but a coding round is not confirmed. Targeted interview-process research is required.",
+    sourceUrl: job?.canonicalUrl || "",
+  };
+  if (LEADERSHIP_TITLE.test(title) && LOW_CODING_LEADERSHIP_TITLE.test(title) && ontology.eligible) return {
+    status: "unknown",
+    evidenceStatus: "inferred",
+    riskLevel: "low",
+    suggestedScore: 4,
+    reason: "The role archetype has low software-coding-interview risk, but the company-specific interview process is not verified.",
+    sourceUrl: job?.canonicalUrl || "",
+  };
+  return {
+    status: "unknown",
+    evidenceStatus: "unknown",
+    riskLevel: "unknown",
+    suggestedScore: null,
+    reason: "Coding-interview format is not verified and the role archetype is not decisive.",
+    sourceUrl: "",
+  };
 }
 
 function normalizeGate(value, fallbackReason) {
+  const suggestedScore = value?.suggestedScore === null || value?.suggestedScore === undefined || value?.suggestedScore === ""
+    ? null
+    : Number(value.suggestedScore);
   return {
     status: ["met", "blocked", "unknown"].includes(value?.status) ? value.status : "unknown",
     evidenceStatus: ["explicit", "inferred", "unknown"].includes(value?.evidenceStatus) ? value.evidenceStatus : "unknown",
     reasoning: clean(value?.reasoning || value?.reason) || fallbackReason,
     sourceUrl: value?.sourceUrl || "",
+    riskLevel: value?.riskLevel || null,
+    suggestedScore: Number.isFinite(suggestedScore) ? clamp(suggestedScore, 0, 5) : null,
   };
 }
 
@@ -279,6 +357,9 @@ function applyGateScores(dimensions, gates, compensation) {
   for (const [key, gate] of Object.entries(gateDimension)) {
     if (gate.status === "blocked") updated[key] = { score: 0, evidenceStatus: gate.evidenceStatus, confidence: 1, reasoning: gate.reasoning };
     if (gate.status === "met" && updated[key].score === null) updated[key] = { score: 4, evidenceStatus: gate.evidenceStatus, confidence: gate.evidenceStatus === "explicit" ? 1 : 0.75, reasoning: gate.reasoning };
+    if (key === "codingInterviewSafety" && gate.status === "unknown" && gate.suggestedScore !== null) {
+      updated[key] = { score: gate.suggestedScore, evidenceStatus: gate.evidenceStatus, confidence: 0.75, reasoning: gate.reasoning };
+    }
   }
   if (compensation && gates.compensation.status === "met") {
     const score = compensation.minimum >= 200000 ? 5 : compensation.minimum >= 170000 ? 4.5 : 3.5;
@@ -317,7 +398,7 @@ export function finalizeDeepEvaluation(job, modelEvaluation) {
   const compensation = compensationEvidence(job);
   const workAuthorization = normalizeGate(authorizationEvidence(job), "Work authorization is not verified.");
   const compensationRequirement = compensationGate(job);
-  const codingEvidence = deterministicCodingEvidence(job);
+  const codingEvidence = classifyCodingInterviewRisk(job);
   const codingInterview = normalizeGate(codingEvidence || modelGates.codingInterview, "Coding-interview format is not verified.");
   const gates = {
     expertiseFit: expertiseGate(job, dimensions, modelGates.expertiseFit),

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   EVALUATION_WEIGHTS,
+  classifyCodingInterviewRisk,
   finalizeDeepEvaluation,
   parseAnnualCompensation,
 } from "../server/job-search/evaluation-framework.js";
@@ -69,7 +70,8 @@ test("public-sector analytics remains a credible fit but explicit salary and spo
   assert.equal(result.mustHave.workAuthorization.status, "blocked");
   assert.equal(result.mustHave.compensation.status, "blocked");
   assert.equal(result.mustHave.codingInterview.status, "unknown");
-  assert.equal(result.dimensions.codingInterviewSafety.score, null);
+  assert.equal(result.dimensions.codingInterviewSafety.score, 4);
+  assert.equal(result.mustHave.codingInterview.riskLevel, "low");
   assert.match(result.summary, /^Pass: The role has a substantive match/);
 });
 
@@ -89,7 +91,8 @@ test("missing salary, sponsorship, and interview evidence stays unknown and rout
   assert.deepEqual(result.decision.unknowns.sort(), ["codingInterview", "compensation", "workAuthorization"]);
   assert.equal(result.dimensions.compensation.score, null);
   assert.equal(result.dimensions.workAuthorization.score, null);
-  assert.equal(result.dimensions.codingInterviewSafety.score, null);
+  assert.equal(result.dimensions.codingInterviewSafety.score, 4);
+  assert.equal(result.mustHave.codingInterview.riskLevel, "low");
 });
 
 test("a compensation range spanning the minimum stays under review", () => {
@@ -141,6 +144,83 @@ test("data-engineering management remains reviewable while data-engineering IC i
   assert.equal(engineer.mustHave.expertiseFit.status, "blocked");
   assert.equal(engineer.mustHave.codingInterview.status, "blocked");
   assert.equal(engineer.verdict, "pass");
+});
+
+test("coding-bound scientist IC roles are inferred blockers when interview stages are omitted", () => {
+  for (const title of ["Senior Data Scientist", "Principal Applied Scientist", "Staff Research Scientist"]) {
+    const risk = classifyCodingInterviewRisk({
+      title,
+      company: "Example",
+      canonicalUrl: "https://example.com/job",
+      description: "Build statistical models and partner with product leaders.",
+      details: { sourceEvidence: [], claims: [], research: { results: [] } },
+    });
+    assert.equal(risk.status, "blocked", title);
+    assert.equal(risk.evidenceStatus, "inferred", title);
+    assert.equal(risk.riskLevel, "near_certain", title);
+  }
+});
+
+test("product science and data-science management are elevated review risks, not automatic blockers", () => {
+  for (const title of ["Product Scientist", "Decision Scientist", "Senior Manager, Data Science"]) {
+    const risk = classifyCodingInterviewRisk({
+      title,
+      company: "Example",
+      canonicalUrl: "https://example.com/job",
+      description: "Lead experimentation, measurement, and cross-functional decisions.",
+      details: { sourceEvidence: [], claims: [], research: { results: [] } },
+    });
+    assert.equal(risk.status, "unknown", title);
+    assert.equal(risk.riskLevel, "elevated", title);
+    assert.equal(risk.suggestedScore, 2, title);
+  }
+});
+
+test("analytics and product leadership are low inferred coding risks but remain unverified", () => {
+  for (const title of ["Senior Analytics Manager", "Strategy and Analytics Lead", "AI Product Manager"]) {
+    const risk = classifyCodingInterviewRisk({
+      title,
+      company: "Example",
+      canonicalUrl: "https://example.com/job",
+      description: "Lead analytics, experimentation, and executive decision support.",
+      details: { sourceEvidence: [], claims: [], research: { results: [] } },
+    });
+    assert.equal(risk.status, "unknown", title);
+    assert.equal(risk.riskLevel, "low", title);
+    assert.equal(risk.suggestedScore, 4, title);
+  }
+});
+
+test("role-specific no-coding evidence overrides an otherwise coding-bound title archetype", () => {
+  const risk = classifyCodingInterviewRisk({
+    title: "Senior Data Scientist",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "The interview process has no live coding and no coding assessment.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  });
+  assert.equal(risk.status, "met");
+  assert.equal(risk.evidenceStatus, "explicit");
+  assert.equal(risk.riskLevel, "low");
+});
+
+test("role-specific web evidence can confirm a technical assessment", () => {
+  const risk = classifyCodingInterviewRisk({
+    title: "Product Analytics Manager",
+    company: "Example Labs",
+    canonicalUrl: "https://example.com/job",
+    description: "Lead product analytics and experimentation.",
+    details: {
+      sourceEvidence: [], claims: [], research: { results: [{
+        title: "Example Labs Product Analytics Manager interview",
+        description: "Candidates complete a SQL assessment before the final interview.",
+        url: "https://interviews.example.org/example-labs-product-analytics-manager",
+      }] },
+    },
+  });
+  assert.equal(risk.status, "blocked");
+  assert.equal(risk.riskLevel, "confirmed");
+  assert.equal(risk.sourceUrl, "https://interviews.example.org/example-labs-product-analytics-manager");
 });
 
 test("employer-level eligibility requires exact-company official E-Verify and sponsorship evidence", () => {

@@ -380,6 +380,38 @@ function completionContent(completion) {
   return String(content || "");
 }
 
+function modelAttempt(response, retry = 0) {
+  return {
+    provider: response.provider,
+    model: response.model,
+    status: response.status,
+    retry,
+    ...(response.error ? {
+      reason: String(response.error)
+        .replace(/(?:sk-|Bearer\s+)[A-Za-z0-9._-]+/gi, "[redacted]")
+        .slice(0, 300),
+    } : {}),
+  };
+}
+
+function shouldRetryGroq({ stage, route, response }) {
+  if (route.provider !== "groq" || !["deep", "critic"].includes(stage)) return false;
+  if (["rate_limited", "provider_error", "provider_unavailable", "timeout", "invalid_response"].includes(response.status)) {
+    return true;
+  }
+  return response.status === "provider_blocked"
+    && /failed(?:_|\s+)generation|failed to generate json/i.test(String(response.error || ""));
+}
+
+function retryDelayMs(response) {
+  const message = String(response.error || "");
+  const match = message.match(/try again in\s+([\d.]+)\s*(ms|milliseconds?|s|seconds?)/i);
+  if (!match) return 1500;
+  const amount = Number(match[1]);
+  const delay = /^m(?:s|illiseconds?)$/i.test(match[2]) ? amount : amount * 1000;
+  return Math.min(5000, Math.max(1500, Math.ceil(delay + 250)));
+}
+
 async function callRoute({ route, messages, schema, runId, operation, maxTokens }) {
   const estimatedInputTokens = estimateTokens(messages);
   const quota = await quotaStatus(route, estimatedInputTokens, maxTokens);
@@ -464,18 +496,16 @@ export async function callRoutedModel({ stage, messages, schema, runId, operatio
     .filter((route) => route.provider !== "local" || providerConfigured("local"));
   const attempts = [];
   for (const route of routes) {
-    const response = await callRoute({ route, messages, schema, runId, operation, maxTokens });
-    attempts.push({
-      provider: response.provider,
-      model: response.model,
-      status: response.status,
-      ...(response.error ? {
-        reason: String(response.error)
-          .replace(/(?:sk-|Bearer\s+)[A-Za-z0-9._-]+/gi, "[redacted]")
-          .slice(0, 300),
-      } : {}),
-    });
+    let response = await callRoute({ route, messages, schema, runId, operation, maxTokens });
+    attempts.push(modelAttempt(response));
     if (response.result) return { ...response, attempts };
+
+    if (shouldRetryGroq({ stage, route, response })) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(response)));
+      response = await callRoute({ route, messages, schema, runId, operation, maxTokens });
+      attempts.push(modelAttempt(response, 1));
+      if (response.result) return { ...response, attempts };
+    }
   }
   return {
     result: null,

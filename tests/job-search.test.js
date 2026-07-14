@@ -1703,6 +1703,49 @@ function validTriagePayload() {
   };
 }
 
+function validCloudDeepPayload() {
+  const dimension = {
+    score: 3,
+    evidenceStatus: "inferred",
+    confidence: 0.8,
+    reasoning: "Substantive transferable fit.",
+  };
+  const gate = {
+    status: "unknown",
+    evidenceStatus: "unknown",
+    reasoning: "Evidence is not available.",
+    sourceUrl: "",
+  };
+  return {
+    verdict: "maybe",
+    overallScore: 64,
+    summary: "The role requires review.",
+    dimensions: {
+      expertiseFit: dimension,
+      workAuthorization: dimension,
+      compensation: dimension,
+      codingInterviewSafety: dimension,
+      leadershipScope: dimension,
+      companyQuality: dimension,
+      interviewVelocity: dimension,
+      aiMlProductAdjacency: dimension,
+      financialServicesAdvantage: dimension,
+      remoteFlexibility: dimension,
+    },
+    mustHave: {
+      expertiseFit: gate,
+      workAuthorization: gate,
+      compensation: gate,
+      codingInterview: gate,
+    },
+    claims: [],
+    redFlags: [],
+    greenFlags: [],
+    unknowns: [],
+    outreachAngle: "",
+  };
+}
+
 test("free model routing falls back from Cloudflare to Groq GPT-OSS", async () => {
   const originalFetch = globalThis.fetch;
   Object.assign(process.env, {
@@ -1773,6 +1816,77 @@ test("invalid structured output falls through to the next free provider", async 
     delete process.env.GROQ_API_KEY;
     delete process.env.CLOUDFLARE_ACCOUNT_ID;
     delete process.env.CLOUDFLARE_API_TOKEN;
+  }
+});
+
+test("deep routing retries a transient Groq JSON-generation failure before falling back", async () => {
+  const originalFetch = globalThis.fetch;
+  process.env.GROQ_API_KEY = "test-groq";
+  delete process.env.JOBSEARCH_LOCAL_LLM_BASE_URL;
+  delete process.env.CLOUDFLARE_ACCOUNT_ID;
+  delete process.env.CLOUDFLARE_API_TOKEN;
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.ZAI_API_KEY;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return mockModelResponse({ error: { message: "Failed to generate JSON. See failed_generation for details." } }, 400);
+    }
+    return mockModelResponse({
+      model: "openai/gpt-oss-20b",
+      choices: [{ message: { content: JSON.stringify(validCloudDeepPayload()) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 600, completion_tokens: 500 },
+    });
+  };
+  try {
+    const response = await providers.callDeepModel({
+      operation: "groq_retry_test",
+      schema: schemas.cloudDeepEvaluationSchema,
+      messages: [{ role: "user", content: "Evaluate this role." }],
+      maxTokens: 1200,
+    });
+    assert.equal(response.status, "live");
+    assert.equal(response.provider, "groq");
+    assert.equal(fetchCount, 2);
+    assert.deepEqual(response.attempts.map((attempt) => attempt.status), ["provider_blocked", "live"]);
+    assert.deepEqual(response.attempts.map((attempt) => attempt.retry), [0, 1]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.GROQ_API_KEY;
+  }
+});
+
+test("deep routing does not retry a truncated Groq response", async () => {
+  const originalFetch = globalThis.fetch;
+  process.env.GROQ_API_KEY = "test-groq";
+  delete process.env.JOBSEARCH_LOCAL_LLM_BASE_URL;
+  delete process.env.CLOUDFLARE_ACCOUNT_ID;
+  delete process.env.CLOUDFLARE_API_TOKEN;
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.ZAI_API_KEY;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return mockModelResponse({
+      model: "openai/gpt-oss-20b",
+      choices: [{ message: { content: "{}" }, finish_reason: "length" }],
+      usage: { prompt_tokens: 600, completion_tokens: 1200 },
+    });
+  };
+  try {
+    const response = await providers.callDeepModel({
+      operation: "groq_truncation_test",
+      schema: schemas.cloudDeepEvaluationSchema,
+      messages: [{ role: "user", content: "Evaluate this role." }],
+      maxTokens: 1200,
+    });
+    assert.equal(response.status, "providers_exhausted");
+    assert.equal(fetchCount, 1);
+    assert.equal(response.attempts.filter((attempt) => attempt.provider === "groq").length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.GROQ_API_KEY;
   }
 });
 
@@ -1909,7 +2023,7 @@ test("cloud deep parsing bounds display text without discarding a usable evaluat
     dimensions: {
       expertiseFit: dimension,
       workAuthorization: dimension,
-      compensation: { score: null, evidenceStatus: "unknown", confidence: 0 },
+      compensation: { score: null, evidenceStatus: "unknown", confidence: 0, reasoning: null },
       codingInterviewSafety: dimension,
       leadershipScope: dimension,
       companyQuality: dimension,
@@ -1921,7 +2035,7 @@ test("cloud deep parsing bounds display text without discarding a usable evaluat
     mustHave: {
       expertiseFit: gate,
       workAuthorization: gate,
-      compensation: gate,
+      compensation: { ...gate, reasoning: null, sourceUrl: null },
       codingInterview: gate,
     },
     claims: [],

@@ -8,6 +8,10 @@ const confidenceSchema = z.number().min(0).max(100).transform((value) => (
 ));
 const boundedText = (maximum) => z.string().trim().min(1).transform((value) => value.slice(0, maximum));
 const boundedOptionalText = (maximum) => z.string().trim().transform((value) => value.slice(0, maximum));
+const boundedModelText = (maximum, fallback) => z.preprocess(
+  (value) => (typeof value === "string" && value.trim() ? value : fallback),
+  boundedText(maximum),
+);
 
 export function normalizeRoleFamilyId(value) {
   const normalized = String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
@@ -129,20 +133,20 @@ const cloudDimensionSchema = z.object({
   score: z.number().min(0).max(5).nullable().default(null),
   evidenceStatus: z.enum(["explicit", "inferred", "unknown"]).default("unknown"),
   confidence: confidenceSchema.default(0),
-  reasoning: boundedText(240).default("Evidence not established."),
+  reasoning: boundedModelText(240, "Evidence not established."),
 });
 
 const cloudMustHaveGateSchema = z.object({
   status: z.enum(["met", "blocked", "unknown"]),
   evidenceStatus: z.enum(["explicit", "inferred", "unknown"]).default("unknown"),
-  reasoning: boundedText(260).default("Evidence not established."),
-  sourceUrl: z.string().url().or(z.literal("")).default(""),
+  reasoning: boundedModelText(260, "Evidence not established."),
+  sourceUrl: z.preprocess((value) => (typeof value === "string" ? value : ""), z.string().url().or(z.literal(""))),
 });
 
 export const cloudDeepEvaluationSchema = z.object({
   verdict: z.enum(["apply", "maybe", "pass"]).default("maybe"),
   overallScore: z.number().int().min(0).max(100).default(50),
-  summary: boundedText(500).default("Model evaluation completed; deterministic gates decide the final verdict."),
+  summary: boundedModelText(500, "Model evaluation completed; deterministic gates decide the final verdict."),
   dimensions: z.object({
     expertiseFit: cloudDimensionSchema,
     workAuthorization: cloudDimensionSchema,

@@ -117,10 +117,15 @@ function publicJob(job) {
   const triageCurrent = job.details?.triageStatus === "complete"
     && job.details?.triagePromptVersion === PROMPT_VERSION;
   const deepCurrent = job.details?.deepStatus === "complete"
+    && job.details?.deepPromptVersion === PROMPT_VERSION
     && job.details?.evaluationFrameworkVersion === EVALUATION_FRAMEWORK_VERSION;
   const triage = triageCurrent ? job.details?.triage || null : null;
   const deep = deepCurrent ? job.details?.deepEvaluation || null : null;
-  const critic = deepCurrent && job.details?.criticStatus === "complete" ? job.details?.critic || null : null;
+  const critic = deepCurrent
+    && job.details?.criticStatus === "complete"
+    && job.details?.criticPromptVersion === PROMPT_VERSION
+    ? job.details?.critic || null
+    : null;
   const cardFacts = buildJobCardFacts(job);
   return {
     id: job.id,

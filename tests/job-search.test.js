@@ -493,6 +493,7 @@ test("every current deep evaluation, including a hard-blocked pass, receives an 
       triagePromptVersion: workflow.PROMPT_VERSION,
       triage: { relevance: "irrelevant", confidence: 0.99, codingIntensity: "high" },
       deepStatus: "complete",
+      deepPromptVersion: workflow.PROMPT_VERSION,
       evaluationFrameworkVersion: evaluationFramework.EVALUATION_FRAMEWORK_VERSION,
       deepEvaluation: {
         verdict: "pass",
@@ -597,6 +598,7 @@ test("queue hold and controlled release preserve history and only activate the r
           triagePromptVersion: workflow.PROMPT_VERSION,
           triage: { relevance: "relevant", confidence: 0.9, codingIntensity: "low" },
           deepStatus: "complete",
+          deepPromptVersion: workflow.PROMPT_VERSION,
           evaluationFrameworkVersion: evaluationFramework.EVALUATION_FRAMEWORK_VERSION,
           deepEvaluation: { verdict: "apply", overallScore: 90 - index },
         },
@@ -617,9 +619,11 @@ test("queue hold and controlled release preserve history and only activate the r
         triagePromptVersion: workflow.PROMPT_VERSION,
         triage: { relevance: "relevant", confidence: 0.95, codingIntensity: "low" },
         deepStatus: "complete",
+        deepPromptVersion: workflow.PROMPT_VERSION,
         evaluationFrameworkVersion: evaluationFramework.EVALUATION_FRAMEWORK_VERSION,
         deepEvaluation: { verdict: "apply", overallScore: 92 },
         criticStatus: "complete",
+        criticPromptVersion: workflow.PROMPT_VERSION,
         critic: { agrees: true, recommendedVerdict: "apply", confidence: 0.9 },
       },
     });

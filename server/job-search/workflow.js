@@ -175,8 +175,11 @@ function shouldRefreshTriage(job) {
 function shouldQueueDeepForJob(job) {
   if (!job) return false;
   const relevance = job.details?.triage?.relevance;
-  const staleEvaluation = Boolean(job.details?.deepEvaluation?.dimensions)
-    && job.details?.evaluationFrameworkVersion !== EVALUATION_FRAMEWORK_VERSION;
+  const staleEvaluation = Boolean(job.details?.deepEvaluation)
+    && (
+      job.details?.evaluationFrameworkVersion !== EVALUATION_FRAMEWORK_VERSION
+      || job.details?.deepPromptVersion !== PROMPT_VERSION
+    );
   if (staleEvaluation) return ["relevant", "uncertain", "irrelevant"].includes(relevance);
   if (job.details?.deepStatus === "complete" || job.details?.deepEvaluation) return false;
   return ["relevant", "uncertain", "irrelevant"].includes(relevance);
@@ -184,8 +187,12 @@ function shouldQueueDeepForJob(job) {
 
 function shouldQueueCriticForJob(job) {
   return Boolean(job?.details?.deepEvaluation)
-    && (!job?.details?.evaluationFrameworkVersion || job.details.evaluationFrameworkVersion === EVALUATION_FRAMEWORK_VERSION)
-    && job?.details?.criticStatus !== "complete";
+    && job?.details?.evaluationFrameworkVersion === EVALUATION_FRAMEWORK_VERSION
+    && job?.details?.deepPromptVersion === PROMPT_VERSION
+    && (
+      job?.details?.criticStatus !== "complete"
+      || job?.details?.criticPromptVersion !== PROMPT_VERSION
+    );
 }
 
 function nextLocalTaskType(job) {

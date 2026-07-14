@@ -157,10 +157,29 @@ function renderAudit(audit) {
   if (!audit) return "";
   const population = audit.population || {};
   const anomalyEntries = Object.entries(population.anomaliesByCode || {});
+  const sample = audit.sample || [];
+  const gateNames = [
+    ["expertiseFit", "Expertise"],
+    ["workAuthorization", "Visa / OPT"],
+    ["compensation", "Compensation"],
+    ["codingInterview", "Coding interview"],
+  ];
   return `<section class="job-calibration">
     <div><span>Independent evaluation audit</span><strong>${Number(audit.sample?.length || 0)} / ${Number(audit.requestedSampleSize || 20)} sampled</strong></div>
     <small>${Number(population.currentDeepAndCritic || 0)} current evaluator + critic results &middot; ${Number(population.incompleteOrStale || 0)} incomplete or stale &middot; ${Number(population.jobsWithAutomatedAnomalies || 0)} jobs with anomalies</small>
     ${anomalyEntries.length ? `<div class="job-budget-providers">${anomalyEntries.map(([code, count]) => `<span>${escapeHtml(statusLabel(code))}: ${Number(count || 0)}</span>`).join("")}</div>` : `<small>No automated anomalies found in the evaluated population.</small>`}
+    ${sample.length ? `<details class="job-audit-details"><summary>Inspect the ${sample.length} sampled evaluations</summary><div class="job-audit-list">${sample.map((job, index) => {
+      const deep = job.deepEvaluation || {};
+      const critic = job.critic || {};
+      const findings = job.findings || [];
+      return `<div class="job-audit-row">
+        <div class="job-audit-heading"><span>${index + 1}</span><div><strong>${escapeHtml(job.title || "Untitled role")}</strong><small>${escapeHtml(job.company || "Unknown company")}${job.location ? ` &middot; ${escapeHtml(job.location)}` : ""}</small></div><div><strong>${escapeHtml(statusLabel(deep.verdict || "missing"))} ${Number.isFinite(Number(deep.overallScore)) ? `&middot; ${Number(deep.overallScore)}` : ""}</strong><small>Critic: ${escapeHtml(statusLabel(critic.recommendedVerdict || "missing"))}${critic.agrees === false ? " &middot; disagrees" : critic.agrees === true ? " &middot; agrees" : ""}</small></div></div>
+        <div class="job-audit-gates">${gateNames.map(([key, label]) => `<span><small>${label}</small><strong>${escapeHtml(statusLabel(deep.mustHave?.[key]?.status || "missing"))}</strong></span>`).join("")}</div>
+        ${findings.length ? `<div class="job-audit-findings">${findings.map((finding) => `<span>${escapeHtml(statusLabel(finding.code))}</span>`).join("")}</div>` : `<small>No automated finding for this evaluation.</small>`}
+        ${deep.summary ? `<p>${escapeHtml(deep.summary)}</p>` : ""}
+        ${job.url ? `<a class="inline-link" href="${escapeHtml(job.url)}" target="_blank" rel="noreferrer">Open role</a>` : ""}
+      </div>`;
+    }).join("")}</div></details>` : ""}
   </section>`;
 }
 

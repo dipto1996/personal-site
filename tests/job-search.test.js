@@ -486,6 +486,54 @@ test("a prompt-version change re-triages every prior relevance class", async () 
   }
 });
 
+test("controlled release supersedes stale deep work with the current prompt revision", async () => {
+  process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
+  try {
+    const job = await seedJob({
+      sourceId: "stale_active_calibration_job",
+      details: {
+        triageStatus: "complete",
+        triagePromptVersion: "obsolete-prompt",
+        triage: { relevance: "relevant", confidence: 0.95, codingIntensity: "low" },
+        deepStatus: "complete",
+        evaluationFrameworkVersion: "obsolete-framework",
+        deepEvaluation: { verdict: "apply", overallScore: 85, dimensions: {} },
+      },
+    });
+    const staleDeep = await repository.enqueueLocalTask({
+      jobId: job.id,
+      taskType: "deep",
+      revision: `${job.contentHash}:obsolete-prompt:windows-deep-grounded-v1`,
+    });
+    await repository.setLocalQueueControl({
+      holdNewTasks: true,
+      holdReason: "prompt_migration",
+      activeReleaseJobIds: [job.id],
+    });
+    await repository.holdLocalQueueTasks({ statuses: ["queued"], reason: "prompt_migration" });
+
+    const release = await workflow.releaseHeldWindowsBacklog({
+      operationKey: "release-current-prompt-revision",
+      dryRun: false,
+      limit: 1,
+    });
+    const tasks = await repository.listLocalTasks({ limit: 20 });
+    const staleTask = tasks.find((task) => task.id === staleDeep.id);
+    const currentTriage = tasks.find((task) => task.jobId === job.id
+      && task.taskType === "triage"
+      && task.status === "queued");
+
+    assert.equal(release.selectedCount, 1);
+    assert.equal(release.selected[0].taskType, "triage");
+    assert.equal(release.activated.createdCount, 1);
+    assert.equal(staleTask.status, "superseded");
+    assert.ok(currentTriage);
+    assert.notEqual(currentTriage.taskKey, staleTask.taskKey);
+  } finally {
+    delete process.env.JOBSEARCH_LOCAL_WORKER_ENABLED;
+  }
+});
+
 test("queue hold and controlled release preserve history and only activate the released cohort", async () => {
   process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
   try {
@@ -499,7 +547,7 @@ test("queue hold and controlled release preserve history and only activate the r
           triage: { relevance: index < 10 ? "relevant" : "uncertain", confidence: 0.8, codingIntensity: "low" },
         },
       });
-      const task = await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: `deep_${index}` });
+      const task = await workflow.enqueueNextWindowsTask(job);
       assert.equal(task.status, "queued");
     }
     for (let index = 0; index < 5; index += 1) {
@@ -515,14 +563,14 @@ test("queue hold and controlled release preserve history and only activate the r
           deepEvaluation: { verdict: "apply", overallScore: 90 - index },
         },
       });
-      await repository.enqueueLocalTask({ jobId: job.id, taskType: "critic", revision: `critic_${index}` });
+      await workflow.enqueueNextWindowsTask(job);
     }
     const pendingTriage = await seedJob({
       sourceId: "held_collector_triage",
       status: "local_triage_pending",
       details: { triageStatus: "pending" },
     });
-    await repository.enqueueLocalTask({ jobId: pendingTriage.id, taskType: "triage", revision: "collector_triage" });
+    await workflow.enqueueNextWindowsTask(pendingTriage);
     const pendingOutreach = await seedJob({
       sourceId: "held_outreach",
       status: "needs_review",
@@ -537,7 +585,7 @@ test("queue hold and controlled release preserve history and only activate the r
         critic: { agrees: true, recommendedVerdict: "apply", confidence: 0.9 },
       },
     });
-    await repository.enqueueLocalTask({ jobId: pendingOutreach.id, taskType: "outreach", revision: "outreach_ready" });
+    await workflow.enqueueNextWindowsTask(pendingOutreach);
     const mismatch = await seedJob({
       sourceId: "clear_mismatch_not_promoted",
       status: "triage_rejected",
@@ -547,7 +595,7 @@ test("queue hold and controlled release preserve history and only activate the r
         triage: { relevance: "irrelevant", confidence: 0.98, codingIntensity: "low" },
       },
     });
-    await repository.enqueueLocalTask({ jobId: mismatch.id, taskType: "deep", revision: "mismatch_should_hold" });
+    await workflow.enqueueNextWindowsTask(mismatch);
     const promoted = await seedJob({
       sourceId: "clear_mismatch_promoted",
       status: "needs_review",
@@ -558,7 +606,7 @@ test("queue hold and controlled release preserve history and only activate the r
         triage: { relevance: "irrelevant", confidence: 0.95, codingIntensity: "low" },
       },
     });
-    await repository.enqueueLocalTask({ jobId: promoted.id, taskType: "deep", revision: "mismatch_promoted" });
+    await workflow.enqueueNextWindowsTask(promoted);
 
     const held = await workflow.reconcileHeldWindowsQueue({
       operationKey: "hold-operation-001",

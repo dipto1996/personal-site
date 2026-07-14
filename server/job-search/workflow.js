@@ -1267,22 +1267,26 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
   });
 }
 
+function windowsTaskRevision(job, taskType) {
+  const revision = `${job.contentHash}:${PROMPT_VERSION}`;
+  return taskType === "critic" && job.details?.deepEvaluation
+    ? `${revision}:windows-critic-v1:${job.details.deepEvaluation.overallScore}`
+    : taskType === "outreach" && job.details?.deepEvaluation
+      ? `${revision}:windows-outreach-v1:${job.details.deepEvaluation.overallScore}`
+      : taskType === "deep"
+        ? `${revision}:windows-deep-grounded-v1`
+        : `${revision}:windows-${taskType}-v1`;
+}
+
 export async function enqueueNextWindowsTask(job) {
   if (!job) return null;
-  const revision = `${job.contentHash}:${PROMPT_VERSION}`;
   const taskType = nextLocalTaskType(job);
   if (!taskType) return null;
   return enqueueLocalTask({
     jobId: job.id,
     taskType,
     priority: localTaskPriority(job, taskType),
-    revision: taskType === "critic" && job.details?.deepEvaluation
-      ? `${revision}:windows-critic-v1:${job.details.deepEvaluation.overallScore}`
-      : taskType === "outreach" && job.details?.deepEvaluation
-        ? `${revision}:windows-outreach-v1:${job.details.deepEvaluation.overallScore}`
-        : taskType === "deep"
-          ? `${revision}:windows-deep-grounded-v1`
-          : `${revision}:windows-${taskType}-v1`,
+    revision: windowsTaskRevision(job, taskType),
     payload: { sourceId: job.sourceId },
   });
 }
@@ -1335,8 +1339,12 @@ export function compareQueueTaskCreatedAt(left, right) {
   return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
 }
 
-function pendingTaskFor(lookup, jobId, taskType) {
-  return (lookup.get(`${jobId}:${taskType}`) || []).find((task) => ["held", "queued", "retry"].includes(task.status)) || null;
+function pendingTaskFor(lookup, job, taskType) {
+  const revision = windowsTaskRevision(job, taskType);
+  const taskKey = hash(job.id, taskType, revision);
+  return (lookup.get(`${job.id}:${taskType}`) || []).find((task) => (
+    task.taskKey === taskKey && ["held", "queued", "retry", "processing"].includes(task.status)
+  )) || null;
 }
 
 function interleaveBuckets(...buckets) {
@@ -1365,34 +1373,36 @@ function buildBackfillReleasePlan(jobs, tasks, { limit = 20, activeReleaseJobIds
   const outreachReady = [];
 
   for (const job of jobs) {
-    if (!job || active.has(job.id)) continue;
-    if (job.details?.triageStatus !== "complete") {
-      const task = pendingTaskFor(lookup, job.id, "triage");
-      if (task) triagePending.push({ job, taskType: "triage", task });
+    if (!job) continue;
+    const taskType = nextLocalTaskType(job);
+    if (!taskType) continue;
+    const task = pendingTaskFor(lookup, job, taskType);
+    if (active.has(job.id) && task && task.status !== "held") continue;
+    if (taskType === "triage") {
+      triagePending.push({ job, taskType, task });
       continue;
     }
-    if (shouldQueueDeepForJob(job)) {
+    if (taskType === "deep") {
       const candidate = {
         job,
-        taskType: "deep",
-        task: pendingTaskFor(lookup, job.id, "deep"),
+        taskType,
+        task,
       };
       if (job.details?.triage?.relevance === "relevant") deepRelevant.push(candidate);
       else if (clearMismatchPromoted(job)) deepPromoted.push(candidate);
       else deepUncertain.push(candidate);
       continue;
     }
-    if (shouldQueueCriticForJob(job)) {
+    if (taskType === "critic") {
       criticReady.push({
         job,
-        taskType: "critic",
-        task: pendingTaskFor(lookup, job.id, "critic"),
+        taskType,
+        task,
       });
       continue;
     }
-    if (nextLocalTaskType(job) === "outreach") {
-      const task = pendingTaskFor(lookup, job.id, "outreach");
-      if (task) outreachReady.push({ job, taskType: "outreach", task });
+    if (taskType === "outreach") {
+      outreachReady.push({ job, taskType, task });
     }
   }
 

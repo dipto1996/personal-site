@@ -1,3 +1,5 @@
+import { hasOptCptCompatibilityEvidence } from "./authorization-evidence.js";
+
 const UNKNOWN_COMPANY = /^(unknown|unknown company|unknown until extraction|not listed|n\/a)?$/i;
 
 const COMPENSATION_PATTERNS = [
@@ -21,11 +23,6 @@ const VISA_PATTERNS = [
     status: "available",
     label: "Sponsorship available",
     pattern: /\b(?:visa sponsorship (?:is )?available|sponsorship available|will (?:provide|offer) (?:visa )?sponsorship|we sponsor|eligible for sponsorship)\b/i,
-  },
-  {
-    status: "opt_friendly",
-    label: "OPT/CPT language found",
-    pattern: /\b(?:STEM OPT|OPT|CPT|F-1)\b/i,
   },
   {
     status: "work_authorization_required",
@@ -85,10 +82,14 @@ function sourceHost(url) {
 }
 
 function visaStatusFromText(value) {
-  return findPatternEvidence(value, VISA_PATTERNS)?.item || {
+  return findPatternEvidence(value, VISA_PATTERNS)?.item
+    || (hasOptCptCompatibilityEvidence(value) ? {
+      status: "opt_friendly",
+      label: "F-1/OPT/CPT language found",
+    } : {
     status: "evidence_found",
     label: "Eligibility evidence found",
-  };
+    });
 }
 
 export function buildJobCardFacts(job) {
@@ -135,6 +136,7 @@ export function buildJobCardFacts(job) {
 
   const visaClaim = claimFor(claims, /(visa|sponsor|work_authorization|immigration|citizenship|clearance)/i);
   const visaMatch = findPatternEvidence(description, VISA_PATTERNS);
+  const optCptMatch = !visaMatch && hasOptCptCompatibilityEvidence(description);
   const claimVisa = visaClaim ? visaStatusFromText(`${visaClaim.value} ${visaClaim.supportingPassage || ""}`) : null;
   const visa = visaClaim ? {
     status: claimVisa.status,
@@ -146,6 +148,16 @@ export function buildJobCardFacts(job) {
     status: visaMatch.item.status,
     label: visaMatch.item.label,
     evidence: visaMatch.passage,
+    evidenceType: "explicit",
+    sourceUrl: url,
+  } : optCptMatch ? {
+    status: "opt_friendly",
+    label: "F-1/OPT/CPT language found",
+    evidence: findPatternEvidence(description, [
+      /\b(?:F-?1(?:\s+(?:visa|student|status|OPT|CPT))?|STEM\s+OPT|optional practical training|curricular practical training)\b/i,
+      /\b(?:visa|immigration|international student|student visa|work authorization|employment authorization|practical training)\b[^.!?]{0,100}\b(?:OPT|CPT)\b/i,
+      /\b(?:OPT|CPT)\b[^.!?]{0,100}\b(?:visa|immigration|international student|student visa|work authorization|employment authorization|practical training)\b/i,
+    ])?.passage || "Immigration-context F-1/OPT/CPT language appears in the posting.",
     evidenceType: "explicit",
     sourceUrl: url,
   } : {

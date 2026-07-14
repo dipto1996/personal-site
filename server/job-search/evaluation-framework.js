@@ -1,7 +1,12 @@
 import { TARGET_PROFILE } from "./profile.js";
 import { classifyCandidateTitle } from "./title-ontology.js";
+import {
+  hasOptCptCompatibilityEvidence,
+  hasOptCptIncompatibilityEvidence,
+  SPONSORSHIP_AVAILABLE_PATTERN,
+} from "./authorization-evidence.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v7";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v8";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 
@@ -29,8 +34,6 @@ const LEGACY_DIMENSIONS = Object.freeze({
 
 const BLOCKED_SPONSORSHIP = /\b(?:not able to consider|unable to consider|will not consider|cannot consider|do not consider|does not consider|no|not eligible for|unable to (?:offer|provide)|cannot (?:offer|provide)|does not (?:offer|provide)|will not (?:offer|provide))[^.]{0,100}(?:visa\s+)?sponsor(?:ship|ing)?\b|\bwithout (?:current or future |now or in the future )?(?:visa )?sponsorship\b/i;
 const CITIZENSHIP_BLOCK = /\b(?:u\.?s\.? citizen(?:ship)? required|must be (?:a )?u\.?s\.? citizen|security clearance required|active security clearance)\b/i;
-const OPT_BLOCK = /\b(?:cannot|can't|unable to|do not|does not|will not|not able to)\s+(?:accept|hire|employ|consider|support)[^.]{0,100}\b(?:F-?1|OPT|STEM OPT|CPT)\b|\b(?:F-?1|OPT|STEM OPT|CPT)\b[^.]{0,100}\b(?:not accepted|not eligible|ineligible|not supported)\b/i;
-const SPONSORSHIP_AVAILABLE = /\b(?:visa sponsorship (?:is )?available|sponsorship available|will (?:provide|offer) (?:visa )?sponsorship|we sponsor|eligible for sponsorship|F-1 OPT|STEM OPT|CPT)\b/i;
 const EVERIFY_HISTORY = /\bE-Verify\b/i;
 const SPONSORSHIP_HISTORY = /\b(?:H-1B employer data|H-1B petitions?|certified LCA|LCA disclosure)\b/i;
 const CODING_INTERVIEW_BLOCK = /\b(?:leetcode|data structures and algorithms|algorithms and data structures|live coding|take-home coding|coding (?:challenge|exercise|screen|assessment|interview|round)|(?:sql|python|r) (?:coding )?(?:test|exercise|challenge|screen|assessment|interview))\b/i;
@@ -205,7 +208,7 @@ function authorizationEvidence(job) {
     && evidenceNamesRole(item, job?.title));
   const jobLevelEvidence = [posting, ...jobClaims, ...roleSpecificResearch];
   const blocked = jobLevelEvidence.find((item) => (
-    BLOCKED_SPONSORSHIP.test(item.text) || CITIZENSHIP_BLOCK.test(item.text) || OPT_BLOCK.test(item.text)
+    BLOCKED_SPONSORSHIP.test(item.text) || CITIZENSHIP_BLOCK.test(item.text) || hasOptCptIncompatibilityEvidence(item.text)
   ));
   if (blocked) return {
     status: "blocked",
@@ -215,12 +218,19 @@ function authorizationEvidence(job) {
       : "The posting explicitly excludes candidates requiring current or future visa sponsorship.",
     sourceUrl: blocked.sourceUrl,
   };
-  const available = jobLevelEvidence.find((item) => SPONSORSHIP_AVAILABLE.test(item.text));
+  const available = jobLevelEvidence.find((item) => SPONSORSHIP_AVAILABLE_PATTERN.test(item.text));
   if (available) return {
     status: "met",
     evidenceStatus: available.evidenceType,
-    reason: "The supplied evidence explicitly indicates sponsorship or F-1 OPT/STEM OPT compatibility.",
+    reason: "The supplied job-level evidence explicitly indicates visa sponsorship is available.",
     sourceUrl: available.sourceUrl,
+  };
+  const optCompatible = jobLevelEvidence.find((item) => hasOptCptCompatibilityEvidence(item.text));
+  if (optCompatible) return {
+    status: "unknown",
+    evidenceStatus: optCompatible.evidenceType,
+    reason: "The posting indicates F-1/OPT/CPT compatibility, but credible future sponsorship is not yet established.",
+    sourceUrl: optCompatible.sourceUrl,
   };
   const employerHistory = research.filter((item) => officialEligibilitySource(item.sourceUrl) && evidenceNamesCompany(item, job?.company));
   const everify = employerHistory.find((item) => EVERIFY_HISTORY.test(item.text));

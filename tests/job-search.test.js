@@ -1419,6 +1419,37 @@ test("job cards preserve unknown eligibility and compensation instead of inventi
   assert.equal(facts.visa.status, "unknown");
 });
 
+test("medical CPT codes are not treated as immigration eligibility evidence", () => {
+  const job = auditReadyJob({
+    title: "Manager Advanced Analytics",
+    description: "Lead healthcare analytics. Expert with ICD 10, CPT, NDC, DRG and other medical and pharmacy codes.",
+  });
+  const facts = cardFacts.buildJobCardFacts(job);
+  const finalized = evaluationFramework.finalizeDeepEvaluation(job, job.details.deepEvaluation);
+  assert.equal(facts.visa.status, "unknown");
+  assert.equal(finalized.mustHave.workAuthorization.status, "unknown");
+});
+
+test("F-1 OPT compatibility is visible but cannot establish future sponsorship by itself", () => {
+  const job = auditReadyJob({
+    description: "Lead product analytics and experimentation. We accept F-1 OPT candidates with valid employment authorization.",
+  });
+  const facts = cardFacts.buildJobCardFacts(job);
+  const finalized = evaluationFramework.finalizeDeepEvaluation(job, job.details.deepEvaluation);
+  assert.equal(facts.visa.status, "opt_friendly");
+  assert.equal(finalized.mustHave.workAuthorization.status, "unknown");
+  assert.match(finalized.mustHave.workAuthorization.reasoning, /future sponsorship is not yet established/i);
+});
+
+test("explicit job-level visa sponsorship can satisfy the authorization gate", () => {
+  const job = auditReadyJob({
+    description: "Lead product analytics and experimentation. Visa sponsorship is available for this position.",
+  });
+  const finalized = evaluationFramework.finalizeDeepEvaluation(job, job.details.deepEvaluation);
+  assert.equal(finalized.mustHave.workAuthorization.status, "met");
+  assert.match(finalized.mustHave.workAuthorization.reasoning, /visa sponsorship is available/i);
+});
+
 test("job cards surface explicit cannot-consider-sponsorship language", () => {
   const facts = cardFacts.buildJobCardFacts({
     canonicalUrl: "https://example.com/jobs/2",

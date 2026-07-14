@@ -3,7 +3,7 @@ import { parseCsv } from "./utils.js";
 export const DEFAULT_OWNER_EMAILS = ["roydiptopal1996@gmail.com"];
 
 export const TARGET_PROFILE = {
-  version: "2026-07-14-analytics-first-v5",
+  version: "2026-07-14-analytics-first-v6",
   headline: "Analytics, experimentation, product analytics, and data science leader; AI product founder",
   baseline:
     process.env.JOBSEARCH_CANDIDATE_BASELINE
@@ -29,7 +29,7 @@ export const TARGET_PROFILE = {
   compensation:
     "Required target is at least USD 170,000 annual base or clearly comparable guaranteed cash. USD 200,000+ base and additional equity are bonuses. Missing compensation requires research or manual review; it is never scored as zero merely because it is unknown.",
   workAuthorization:
-    "Candidate is an F-1 STEM MBA graduate seeking employers that can employ F-1 OPT/STEM OPT talent and support future work authorization. Explicit no-current-or-future-sponsorship, citizenship, or clearance restrictions are blockers. Verified E-Verify participation and recent government H-1B/LCA history are positive employer-level evidence but do not override an explicit job-level restriction.",
+    "Candidate is an F-1 STEM MBA graduate seeking employers that can employ F-1 OPT/STEM OPT talent and support future work authorization. F-1/OPT/CPT acceptance proves current compatibility only, not future sponsorship. Explicit no-current-or-future-sponsorship, citizenship, or clearance restrictions are blockers. Verified E-Verify participation and recent government H-1B/LCA history are positive employer-level evidence but do not override an explicit job-level restriction.",
   hardRequirements: {
     expertiseFit: "Primary responsibilities must substantially match the candidate's demonstrated analytics, experimentation, product analytics, marketing/customer data science, strategy analytics, data-product, or product-builder experience.",
     workAuthorization: "The role must be compatible with F-1 OPT/STEM OPT and credible future sponsorship. Explicit incompatibility is a blocker; missing evidence requires review.",

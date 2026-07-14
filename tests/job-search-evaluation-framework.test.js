@@ -126,6 +126,11 @@ test("annual compensation parser handles decimal salary ranges without treating 
   });
 });
 
+test("annual compensation parser rejects a truncated bare pay value without a period", () => {
+  assert.equal(parseAnnualCompensation("Pay Range: $65"), null);
+  assert.equal(parseAnnualCompensation("Base salary range: $170-$220").minimum, 170000);
+});
+
 test("hourly compensation is annualized once without treating hourly rates as thousands", () => {
   assert.deepEqual(parseAnnualCompensation("$20-$30 per hour"), {
     minimum: 41600,
@@ -166,6 +171,10 @@ test("annual compensation parser does not mistake years of experience for salary
 });
 
 test("total-compensation-only evidence cannot satisfy the annual-base gate", () => {
+  assert.equal(
+    parseAnnualCompensation("Pay range: $220,000-$260,000 including bonus and equity")?.compensationType,
+    "total",
+  );
   const result = finalizeDeepEvaluation({
     title: "Director of Analytics",
     company: "Example",

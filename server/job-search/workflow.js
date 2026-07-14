@@ -71,7 +71,7 @@ import { normalizeTimestampInput } from "./utils.js";
 import { rotatingWatchlistCompanies } from "./watchlist.js";
 import { parseWorkerOutput } from "./worker-contract.js";
 
-export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v10";
+export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v11";
 
 const INTERVIEW_RISK_INSTRUCTIONS = "Infer interview risk from the role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work do not alone prove a coding round.";
 

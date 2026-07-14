@@ -248,7 +248,7 @@ function criticMessages(packet) {
   return [
     {
       role: "system",
-      content: "Act as an independent skeptical career strategist. Return JSON only and use only supplied evidence. Prefer correcting optimism over preserving agreement.",
+      content: "Act as an independent skeptical career strategist. Return JSON only and use only supplied evidence. Look equally for false rejection and false optimism; do not preserve agreement for its own sake.",
     },
     {
       role: "user",

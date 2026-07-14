@@ -1,11 +1,12 @@
 import { hasOptCptCompatibilityEvidence } from "./authorization-evidence.js";
+import { parseAnnualCompensation } from "./evaluation-framework.js";
 
 const UNKNOWN_COMPANY = /^(unknown|unknown company|unknown until extraction|not listed|n\/a)?$/i;
 
 const COMPENSATION_PATTERNS = [
-  /(?:USD\s*)?\$\s?\d{2,3}(?:,\d{3}|(?:\.\d+)?[kKmM])?\s*(?:-|–|—|to)\s*(?:USD\s*)?\$?\s?\d{2,3}(?:,\d{3}|(?:\.\d+)?[kKmM])?(?:\s*(?:per|\/)?\s*(?:hour|hr|year|yr|annum|annually))?/i,
+  /(?:USD\s*)?\$\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kKmM]?\s*(?:-|–|—|to)\s*(?:USD\s*)?\$?\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kKmM]?(?:\s*(?:per|\/)?\s*(?:hour|hr|year|yr|annum|annually))?/i,
+  /\b(?:salary|compensation|base pay|pay rate|pay range)\b[^$]{0,80}(?:USD\s*)?\$\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kKmM]?(?:\s*(?:per|\/)?\s*(?:hour|hr|year|yr|annum|annually))?/i,
   /\b(?:base )?(?:salary|compensation|pay) (?:range|rate)\b[^.!?]{0,180}/i,
-  /\b(?:salary|compensation|base pay|pay rate)\b[^.!?]{0,80}(?:USD\s*)?\$\s?\d{2,3}(?:,\d{3}|(?:\.\d+)?[kKmM])?/i,
 ];
 
 const VISA_PATTERNS = [
@@ -99,6 +100,9 @@ export function buildJobCardFacts(job) {
   const company = clean(job.company);
   const description = clean(job.description);
   const structuredCompensation = clean(job.details?.sourceMetadata?.compensation);
+  const usableStructuredCompensation = structuredCompensation && parseAnnualCompensation(structuredCompensation)
+    ? structuredCompensation
+    : "";
 
   const candidateCompensationClaim = claimFor(claims, /(compensation|salary|base_pay|pay_range)/i);
   const compensationClaim = candidateCompensationClaim
@@ -108,10 +112,10 @@ export function buildJobCardFacts(job) {
     ? candidateCompensationClaim
     : null;
   const compensationMatch = findPatternEvidence(description, COMPENSATION_PATTERNS);
-  const compensation = structuredCompensation ? {
+  const compensation = usableStructuredCompensation ? {
     status: "listed",
-    label: structuredCompensation,
-    evidence: structuredCompensation,
+    label: usableStructuredCompensation,
+    evidence: usableStructuredCompensation,
     evidenceType: "explicit",
     sourceUrl: url,
   } : compensationClaim ? {

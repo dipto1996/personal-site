@@ -6,7 +6,7 @@ import {
   SPONSORSHIP_AVAILABLE_PATTERN,
 } from "./authorization-evidence.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v8";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v9";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 
@@ -96,6 +96,14 @@ export function parseAnnualCompensation(value) {
   const currencyOrThousandsMarked = /(?:USD|\$)/i.test(range?.[0] || single?.[0] || "")
     || Boolean(range?.[2] || range?.[4] || single?.[2]);
   const hourly = /(?:per|\/|a)\s*(?:hour|hr)\b|\bhourly\b/i.test(text);
+  const hasThousandsSuffix = Boolean(range?.[2] || range?.[4] || single?.[2]);
+  const compactAnnualContext = /\b(?:annual|annually|year|yearly|salary|base|pay range|compensation)\b/i.test(text);
+  const rawMaximum = Number.parseFloat(String(range?.[3] || range?.[1] || single?.[1] || "").replaceAll(",", ""));
+  if (!hourly && !hasThousandsSuffix && rawMinimum < 1000 && rawMaximum < 1000) {
+    const plausibleAbbreviatedAnnualRange = Boolean(range) && rawMinimum >= 100 && rawMaximum >= 100 && compactAnnualContext;
+    const plausibleAbbreviatedAnnualSingle = Boolean(single) && rawMinimum >= 100 && compactAnnualContext;
+    if (!plausibleAbbreviatedAnnualRange && !plausibleAbbreviatedAnnualSingle) return null;
+  }
   if (!currencyOrThousandsMarked && !hourly && rawMinimum < 40) return null;
   let minimum = numericSalary(range?.[1] || single?.[1], range?.[2] || single?.[2], { hourly });
   let maximum = numericSalary(range?.[3] || range?.[1] || single?.[1], range?.[4] || range?.[2] || single?.[2], { hourly });
@@ -104,8 +112,9 @@ export function parseAnnualCompensation(value) {
     minimum = Math.round(minimum * 2080);
     maximum = Math.round(maximum * 2080);
   }
-  const totalCompensationOnly = /\b(?:total (?:annual )?compensation|total rewards?|on-target earnings|OTE)\b/i.test(text)
-    && !/\b(?:base|base salary|salary range|pay range|base pay)\b/i.test(text);
+  const totalCompensationOnly = (/\b(?:total (?:annual )?compensation|total rewards?|on-target earnings|OTE)\b/i.test(text)
+      || /\b(?:compensation|pay range)\b[^.!?]{0,160}\b(?:including|includes)\b[^.!?]{0,80}\b(?:bonus|equity|stock|commission)\b/i.test(text))
+    && !/\b(?:base(?: salary| pay)?|salary range)\b/i.test(text);
   return {
     minimum: Math.min(minimum, maximum),
     maximum: Math.max(minimum, maximum),
@@ -183,7 +192,9 @@ function compensationEvidence(job) {
     ...relevantClaims(job, /(compensation|salary|base_pay|pay_range)/i),
   ];
   const description = clean(job?.description);
-  const salarySentence = description.match(/[^.!?]{0,100}\b(?:salary|compensation|base pay|pay range|pays?|hourly rate|wage)\b[^.!?]{0,220}/i)?.[0];
+  const numericSalaryRange = description.match(/\b(?:total (?:annual )?compensation|total rewards?|on-target earnings|OTE|salary|compensation|base pay|pay range|pays?|hourly rate|wage)\b[^$]{0,100}(?:USD\s*)?\$\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?\s*(?:-|–|—|to)\s*(?:USD\s*)?\$?\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?(?:\s*(?:per|\/|a)?\s*(?:hour|hr|year|yr|annum|annually))?(?:[^.!?]{0,100}\b(?:including|includes)\b[^.!?]{0,80}\b(?:bonus|equity|stock|commission)\b)?/i)?.[0];
+  const salarySentence = numericSalaryRange
+    || description.match(/[^.!?]{0,100}\b(?:salary|compensation|base pay|pay range|pays?|hourly rate|wage)\b[^.!?]{0,220}/i)?.[0];
   if (salarySentence) candidates.push({ text: salarySentence, sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" });
   candidates.push(...researchEvidence(job).filter((item) => (
     evidenceNamesCompany(item, job?.company)

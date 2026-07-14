@@ -1062,6 +1062,8 @@ test("maximal Windows worker packet fits the 8192 context budget and retains pri
     job: { ...packet.job, deepEvaluation: { verdict: "maybe" } },
   });
   assert.equal(criticPass.thinking, true);
+  assert.match(criticPass.messages[0].content, /equally for false rejection and false optimism/i);
+  assert.doesNotMatch(criticPass.messages[0].content, /prefer correcting optimism/i);
 });
 
 test("Windows collector launcher quotes paths and status uses the live resource phase", async () => {
@@ -1449,6 +1451,21 @@ test("job cards preserve unknown eligibility and compensation instead of inventi
   assert.equal(facts.company.label, "Company not identified");
   assert.equal(facts.compensation.status, "not_listed");
   assert.equal(facts.visa.status, "unknown");
+});
+
+test("truncated structured pay does not override a complete hourly range", () => {
+  const job = auditReadyJob({
+    title: "Manager Advanced Analytics-28513",
+    description: "Lead advanced analytics and experimentation. Pay Range: $65.45 - $97.52 per hour.",
+  });
+  job.details.sourceMetadata = { compensation: "Pay Range: $65" };
+
+  const facts = cardFacts.buildJobCardFacts(job);
+  const finalized = evaluationFramework.finalizeDeepEvaluation(job, job.details.deepEvaluation);
+  assert.match(facts.compensation.label, /\$65\.45\s*-\s*\$97\.52 per hour/i);
+  assert.equal(finalized.mustHave.compensation.status, "unknown");
+  assert.equal(finalized.decision.blockers.includes("compensation"), false);
+  assert.match(finalized.mustHave.compensation.reasoning, /spans the \$170,000 threshold/i);
 });
 
 test("medical CPT codes are not treated as immigration eligibility evidence", () => {

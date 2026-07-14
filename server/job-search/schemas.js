@@ -136,6 +136,13 @@ const cloudDimensionSchema = z.object({
   reasoning: boundedModelText(240, "Evidence not established."),
 });
 
+const UNKNOWN_CLOUD_DIMENSION = Object.freeze({
+  score: null,
+  evidenceStatus: "unknown",
+  confidence: 0,
+  reasoning: "Evidence not established.",
+});
+
 const cloudMustHaveGateSchema = z.object({
   status: z.enum(["met", "blocked", "unknown"]),
   evidenceStatus: z.enum(["explicit", "inferred", "unknown"]).default("unknown"),
@@ -143,34 +150,87 @@ const cloudMustHaveGateSchema = z.object({
   sourceUrl: z.preprocess((value) => (typeof value === "string" ? value : ""), z.string().url().or(z.literal(""))),
 });
 
-export const cloudDeepEvaluationSchema = z.object({
-  verdict: z.enum(["apply", "maybe", "pass"]).default("maybe"),
-  overallScore: z.number().int().min(0).max(100).default(50),
+const UNKNOWN_CLOUD_GATE = Object.freeze({
+  status: "unknown",
+  evidenceStatus: "unknown",
+  reasoning: "Evidence not established.",
+  sourceUrl: "",
+});
+
+const cloudVerdictSchema = z.preprocess((value) => {
+  const normalized = String(value || "maybe").trim().toLowerCase().replace(/[^a-z]+/g, "_");
+  if (["apply", "pursue", "shortlist", "recommended"].includes(normalized)) return "apply";
+  if (["pass", "reject", "rejected", "not_a_fit", "not_fit"].includes(normalized)) return "pass";
+  if (["maybe", "review", "needs_review", "manual_review", "uncertain"].includes(normalized)) return "maybe";
+  return value;
+}, z.enum(["apply", "maybe", "pass"]));
+
+function normalizeCloudDeepPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const sourceDimensions = value.dimensions && typeof value.dimensions === "object" && !Array.isArray(value.dimensions)
+    ? value.dimensions
+    : {};
+  const aliases = {
+    expertiseFit: ["expertiseFit", "roleFit", "role_fit", "expertise_fit"],
+    workAuthorization: ["workAuthorization", "locationAuthorization", "work_authorization"],
+    compensation: ["compensation", "compensationUpside", "compensation_fit"],
+    codingInterviewSafety: ["codingInterviewSafety", "coding_interview_safety"],
+    leadershipScope: ["leadershipScope", "leadershipLevel", "leadership_scope"],
+    companyQuality: ["companyQuality", "company_quality"],
+    interviewVelocity: ["interviewVelocity", "interview_velocity"],
+    aiMlProductAdjacency: ["aiMlProductAdjacency", "aiDataRelevance", "ai_ml_product_adjacency"],
+    financialServicesAdvantage: ["financialServicesAdvantage", "financial_services_advantage"],
+    remoteFlexibility: ["remoteFlexibility", "remote_flexibility"],
+  };
+  const inferredKeys = new Set([
+    "expertiseFit", "leadershipScope", "companyQuality", "interviewVelocity",
+    "aiMlProductAdjacency", "financialServicesAdvantage", "remoteFlexibility",
+  ]);
+  const dimensions = {};
+  for (const [key, candidates] of Object.entries(aliases)) {
+    const candidate = candidates.map((name) => sourceDimensions[name] ?? value[name]).find((item) => item !== undefined);
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)
+        && inferredKeys.has(key) && candidate.score !== null && candidate.score !== undefined
+        && !candidate.evidenceStatus) {
+      dimensions[key] = { ...candidate, evidenceStatus: "inferred" };
+    } else if (candidate !== undefined) {
+      dimensions[key] = candidate;
+    }
+  }
+  const mustHave = value.mustHave && typeof value.mustHave === "object" && !Array.isArray(value.mustHave)
+    ? value.mustHave
+    : value.gates && typeof value.gates === "object" && !Array.isArray(value.gates) ? value.gates : {};
+  return { ...value, dimensions, mustHave };
+}
+
+export const cloudDeepEvaluationSchema = z.preprocess(normalizeCloudDeepPayload, z.object({
+  verdict: cloudVerdictSchema,
+  overallScore: z.coerce.number().int().min(0).max(100).default(50),
   summary: boundedModelText(500, "Model evaluation completed; deterministic gates decide the final verdict."),
   dimensions: z.object({
     expertiseFit: cloudDimensionSchema,
-    workAuthorization: cloudDimensionSchema,
-    compensation: cloudDimensionSchema,
-    codingInterviewSafety: cloudDimensionSchema,
-    leadershipScope: cloudDimensionSchema,
-    companyQuality: cloudDimensionSchema,
-    interviewVelocity: cloudDimensionSchema,
-    aiMlProductAdjacency: cloudDimensionSchema,
-    financialServicesAdvantage: cloudDimensionSchema,
-    remoteFlexibility: cloudDimensionSchema,
+    workAuthorization: cloudDimensionSchema.default(UNKNOWN_CLOUD_DIMENSION),
+    compensation: cloudDimensionSchema.default(UNKNOWN_CLOUD_DIMENSION),
+    codingInterviewSafety: cloudDimensionSchema.default(UNKNOWN_CLOUD_DIMENSION),
+    leadershipScope: cloudDimensionSchema.default(UNKNOWN_CLOUD_DIMENSION),
+    companyQuality: cloudDimensionSchema.default(UNKNOWN_CLOUD_DIMENSION),
+    interviewVelocity: cloudDimensionSchema.default(UNKNOWN_CLOUD_DIMENSION),
+    aiMlProductAdjacency: cloudDimensionSchema.default(UNKNOWN_CLOUD_DIMENSION),
+    financialServicesAdvantage: cloudDimensionSchema.default(UNKNOWN_CLOUD_DIMENSION),
+    remoteFlexibility: cloudDimensionSchema.default(UNKNOWN_CLOUD_DIMENSION),
   }),
   mustHave: z.object({
-    expertiseFit: cloudMustHaveGateSchema,
-    workAuthorization: cloudMustHaveGateSchema,
-    compensation: cloudMustHaveGateSchema,
-    codingInterview: cloudMustHaveGateSchema,
+    expertiseFit: cloudMustHaveGateSchema.default(UNKNOWN_CLOUD_GATE),
+    workAuthorization: cloudMustHaveGateSchema.default(UNKNOWN_CLOUD_GATE),
+    compensation: cloudMustHaveGateSchema.default(UNKNOWN_CLOUD_GATE),
+    codingInterview: cloudMustHaveGateSchema.default(UNKNOWN_CLOUD_GATE),
   }),
   claims: z.array(cloudGroundedEvidenceSchema).transform((items) => items.slice(0, 6)).default([]),
   redFlags: z.array(boundedText(180)).transform((items) => items.slice(0, 6)).default([]),
   greenFlags: z.array(boundedText(180)).transform((items) => items.slice(0, 6)).default([]),
   unknowns: z.array(boundedText(180)).transform((items) => items.slice(0, 6)).default([]),
   outreachAngle: boundedOptionalText(320).default(""),
-});
+}));
 
 const modelStringListSchema = z.preprocess((value) => {
   if (Array.isArray(value)) return value;

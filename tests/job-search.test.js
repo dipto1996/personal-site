@@ -1828,8 +1828,10 @@ test("deep routing retries a transient Groq JSON-generation failure before falli
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.ZAI_API_KEY;
   let fetchCount = 0;
-  globalThis.fetch = async () => {
+  const responseFormats = [];
+  globalThis.fetch = async (_url, options) => {
     fetchCount += 1;
+    responseFormats.push(JSON.parse(options.body).response_format.type);
     if (fetchCount === 1) {
       return mockModelResponse({ error: { message: "Failed to generate JSON. See failed_generation for details. Please try again in 0ms." } }, 400);
     }
@@ -1851,6 +1853,7 @@ test("deep routing retries a transient Groq JSON-generation failure before falli
     assert.equal(fetchCount, 2);
     assert.deepEqual(response.attempts.map((attempt) => attempt.status), ["provider_blocked", "live"]);
     assert.deepEqual(response.attempts.map((attempt) => attempt.retry), [0, 1]);
+    assert.deepEqual(responseFormats, ["json_object", "json_object"]);
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.GROQ_API_KEY;
@@ -1866,8 +1869,10 @@ test("deep routing does not retry a truncated Groq response", async () => {
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.ZAI_API_KEY;
   let fetchCount = 0;
-  globalThis.fetch = async () => {
+  const attemptedModels = [];
+  globalThis.fetch = async (_url, options) => {
     fetchCount += 1;
+    attemptedModels.push(JSON.parse(options.body).model);
     return mockModelResponse({
       model: "openai/gpt-oss-20b",
       choices: [{ message: { content: "{}" }, finish_reason: "length" }],
@@ -1882,8 +1887,46 @@ test("deep routing does not retry a truncated Groq response", async () => {
       maxTokens: 1200,
     });
     assert.equal(response.status, "providers_exhausted");
-    assert.equal(fetchCount, 1);
-    assert.equal(response.attempts.filter((attempt) => attempt.provider === "groq").length, 1);
+    assert.equal(fetchCount, 2);
+    assert.deepEqual(attemptedModels, ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]);
+    assert.equal(response.attempts.filter((attempt) => attempt.model === "openai/gpt-oss-20b").length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.GROQ_API_KEY;
+  }
+});
+
+test("deep routing falls through from Groq 20B to the independent 120B free quota", async () => {
+  const originalFetch = globalThis.fetch;
+  process.env.GROQ_API_KEY = "test-groq";
+  delete process.env.JOBSEARCH_LOCAL_LLM_BASE_URL;
+  delete process.env.CLOUDFLARE_ACCOUNT_ID;
+  delete process.env.CLOUDFLARE_API_TOKEN;
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.ZAI_API_KEY;
+  const models = [];
+  globalThis.fetch = async (_url, options) => {
+    const model = JSON.parse(options.body).model;
+    models.push(model);
+    if (model === "openai/gpt-oss-20b") {
+      return mockModelResponse({ error: { message: "Failed to generate JSON. Please try again in 0ms." } }, 400);
+    }
+    return mockModelResponse({
+      model,
+      choices: [{ message: { content: JSON.stringify(validCloudDeepPayload()) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 600, completion_tokens: 500 },
+    });
+  };
+  try {
+    const response = await providers.callDeepModel({
+      operation: "groq_model_fallback_test",
+      schema: schemas.cloudDeepEvaluationSchema,
+      messages: [{ role: "user", content: "Evaluate this role." }],
+      maxTokens: 1200,
+    });
+    assert.equal(response.status, "live");
+    assert.equal(response.model, "openai/gpt-oss-120b");
+    assert.deepEqual(models, ["openai/gpt-oss-20b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"]);
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.GROQ_API_KEY;
@@ -2047,6 +2090,29 @@ test("cloud deep parsing bounds display text without discarding a usable evaluat
   assert.equal(parsed.summary.length, 500);
   assert.equal(parsed.unknowns.length, 6);
   assert.equal(parsed.dimensions.compensation.reasoning, "Evidence not established.");
+});
+
+test("cloud deep parsing normalizes known free-model shape variants without inventing expertise", () => {
+  const parsed = schemas.cloudDeepEvaluationSchema.parse({
+    verdict: "review",
+    overallScore: "62",
+    summary: "Strong analytics transfer with unresolved eligibility.",
+    roleFit: {
+      score: 4,
+      confidence: 0.8,
+      reasoning: "Direct analytics leadership and experimentation alignment.",
+    },
+  });
+  assert.equal(parsed.verdict, "maybe");
+  assert.equal(parsed.overallScore, 62);
+  assert.equal(parsed.dimensions.expertiseFit.score, 4);
+  assert.equal(parsed.dimensions.expertiseFit.evidenceStatus, "inferred");
+  assert.equal(parsed.dimensions.compensation.score, null);
+  assert.equal(parsed.mustHave.compensation.status, "unknown");
+  assert.throws(() => schemas.cloudDeepEvaluationSchema.parse({
+    verdict: "review",
+    summary: "No responsibility-level fit assessment was returned.",
+  }));
 });
 
 test("critic agreement is derived from the recommended and primary verdicts", () => {

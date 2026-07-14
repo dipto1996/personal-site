@@ -210,9 +210,10 @@ const MODEL_ROUTES = {
   ],
   deep: [
     { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-4b", format: "json_schema", thinking: true },
-    { provider: "groq", model: "openai/gpt-oss-20b", format: "json_schema", reasoningEffort: "low" },
-    { provider: "cloudflare", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", format: "json_schema" },
-    { provider: "openrouter", model: "openrouter/free", format: "json_schema" },
+    { provider: "groq", model: "openai/gpt-oss-20b", format: "json_object", reasoningEffort: "low" },
+    { provider: "groq", model: "openai/gpt-oss-120b", format: "json_object", reasoningEffort: "low" },
+    { provider: "cloudflare", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", format: "json_object" },
+    { provider: "openrouter", model: "openrouter/free", format: "json_object" },
     { provider: "zai", model: "glm-5.2", format: "json_object", paid: true },
   ],
   critic: [
@@ -485,13 +486,14 @@ async function callRoute({ route, messages, schema, runId, operation, maxTokens 
       usage,
     };
   } catch (error) {
+    const rawOutput = completionContent(completion).replace(/\s+/g, " ").trim().slice(0, 220);
     return {
       result: null,
       status: "invalid_response",
       provider: route.provider,
       model: route.model,
       usage,
-      error: error.message,
+      error: `${rawOutput ? `Model output: ${rawOutput} | ` : ""}Validation: ${error.message}`,
     };
   }
 }

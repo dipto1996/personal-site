@@ -794,6 +794,17 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.ok(workerScript.indexOf("resourcesReadyBeforeClaim()") < workerScript.indexOf('workerFetch("claim"'));
 });
 
+test("Windows updater preserves the protected credential and fast-forwards without model reinstallation", async () => {
+  const script = await readFile(new URL("../scripts/windows/update-job-worker.ps1", import.meta.url), "utf8");
+  assert.match(script, /Get-WorkerCredential/);
+  assert.match(script, /status --porcelain/);
+  assert.match(script, /merge --ff-only/);
+  assert.match(script, /-RegisterScheduledTask/);
+  assert.match(script, /credentialReused = \$true/);
+  assert.doesNotMatch(script, /install-job-worker\.ps1/);
+  assert.doesNotMatch(script, /ReplaceCredential/);
+});
+
 test("Windows resource guard permits this model tier and always rejects Qwen3-14B", () => {
   assert.equal(resourceGuard.assertApprovedWindowsModel("Qwen3-4B-Q4_K_M.gguf"), true);
   assert.throws(() => resourceGuard.assertApprovedWindowsModel("Qwen3-14B-Q4_K_M.gguf"), /prohibited/);

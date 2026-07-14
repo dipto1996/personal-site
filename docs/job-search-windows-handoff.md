@@ -83,6 +83,7 @@ The model must never invent missing compensation, visa, remote, or interview evi
 ## Windows Deliverables
 
 - `scripts/windows/install-job-worker.ps1`
+- `scripts/windows/update-job-worker.ps1`
 - `scripts/windows/start-job-worker.ps1`
 - `scripts/windows/uninstall-job-worker.ps1`
 - HTTP-mode worker client with lease recovery and local health checks
@@ -91,6 +92,13 @@ The model must never invent missing compensation, visa, remote, or interview evi
 - On-demand `llama.cpp` lifecycle management
 - Hardware inventory and benchmark report
 - 20-job calibration report
+
+## Updating An Existing Worker
+
+After the initial credential and model installation, use `update-job-worker.ps1` for later releases.
+It refuses a dirty checkout, stops the current process, fast-forwards the approved branch, reuses the
+DPAPI-protected worker token and existing model paths, rewrites the versioned configuration, registers
+the logon task, and starts the worker. It never prints or transfers the worker token.
 
 ## Calibration Gate
 

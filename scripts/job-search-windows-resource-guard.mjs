@@ -13,10 +13,10 @@ $cpu=Get-CimInstance Win32_Processor | Select-Object -First 1
 $disk=Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
 $nvidia=$null
 if(Get-Command nvidia-smi -ErrorAction SilentlyContinue){
-  $line=nvidia-smi --query-gpu=name,memory.total,memory.free,utilization.gpu --format=csv,noheader,nounits 2>$null | Select-Object -First 1
+  $line=nvidia-smi --query-gpu=name,memory.total,memory.free,utilization.gpu,temperature.gpu --format=csv,noheader,nounits 2>$null | Select-Object -First 1
   if($line){
     $parts=$line -split ',' | ForEach-Object { $_.Trim() }
-    $nvidia=[pscustomobject]@{name=$parts[0];totalVramMiB=[int]$parts[1];freeVramMiB=[int]$parts[2];utilizationPercent=[int]$parts[3]}
+    $nvidia=[pscustomobject]@{name=$parts[0];totalVramMiB=[int]$parts[1];freeVramMiB=[int]$parts[2];utilizationPercent=[int]$parts[3];temperatureCelsius=[int]$parts[4]}
   }
 }
 [pscustomobject]@{
@@ -57,6 +57,10 @@ export function evaluateResourceGuard(inventory, { phase = "task" } = {}) {
   if (phase === "startup" && inventory.nvidia && inventory.nvidia.freeVramMiB < 4000) {
     reasons.push("At least 4000 MiB free NVIDIA VRAM is required before model startup.");
   }
+  const maximumGpuTemperature = phase === "startup" ? 72 : 80;
+  if (inventory.nvidia?.temperatureCelsius >= maximumGpuTemperature) {
+    reasons.push(`GPU temperature is ${inventory.nvidia.temperatureCelsius} C; maximum for ${phase} is ${maximumGpuTemperature} C.`);
+  }
   return {
     ok: reasons.length === 0,
     phase,
@@ -68,6 +72,7 @@ export function evaluateResourceGuard(inventory, { phase = "task" } = {}) {
       gpu: inventory.nvidia?.name || "none",
       totalVramMiB: inventory.nvidia?.totalVramMiB || 0,
       freeVramMiB: inventory.nvidia?.freeVramMiB || 0,
+      gpuTemperatureCelsius: inventory.nvidia?.temperatureCelsius ?? null,
       cpuLoadPercent: inventory.cpu?.loadPercent || 0,
     },
   };

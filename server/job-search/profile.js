@@ -3,11 +3,11 @@ import { parseCsv } from "./utils.js";
 export const DEFAULT_OWNER_EMAILS = ["roydiptopal1996@gmail.com"];
 
 export const TARGET_PROFILE = {
-  version: "2026-07-14-analytics-first-v3",
+  version: "2026-07-14-analytics-first-v4",
   headline: "Analytics, experimentation, product analytics, and data science leader; AI product founder",
   baseline:
     process.env.JOBSEARCH_CANDIDATE_BASELINE
-    || "Cornell Tech MBA and analytics/data-science leader with 8 years across American Express and zero-to-one startups. At American Express: Manager, Data Science leading five data scientists for US commercial retention; built churn, spend, forecasting, sentiment, marketing-treatment, gamer-suppression, and NPV models; drove $500M+ incremental billings and $12M annual profit. Previously led digital acquisition analytics, clickstream data products, conversion optimization, multivariate and A/B experimentation associated with $430M incremental acquisition revenue, forecasting, product analytics, KPI/funnel dashboards, and executive decision support. Core expertise is analytics leadership, experimentation, product and marketing analytics, customer/retention analytics, data-science management, strategy analytics, decision science, and data products. Additional differentiators are financial-services depth and founder/CTO experience shipping AI products, RAG, agent workflows, governance, evaluations, data pipelines, and data architecture. AI is an adjacency and future direction, not a prerequisite for role fit. Avoid backend/software-engineering IC roles and coding-interview-heavy tracks.",
+    || "Cornell Tech STEM MBA and analytics/data-science leader with 8 years across American Express and zero-to-one startups. At American Express, served as Manager, Data Science and led five data scientists for US commercial retention; owned churn, spend, forecasting, sentiment, marketing-treatment, gamer-suppression, and NPV modeling that drove $500M+ incremental billings and $12M annual profit. Previously led digital acquisition and product analytics, built an enterprise clickstream data product with 400+ behavioral indicators, ran conversion optimization and multivariate/A/B experimentation associated with $430M incremental acquisition revenue, and delivered forecasting, KPI/funnel dashboards, and executive decision support. The demonstrated core is analytics leadership, experimentation and causal measurement, product/growth/marketing/customer analytics, data-science management for marketing and customer models, strategy analytics, decision science, and data products. Founder/CTO work adds zero-to-one product management, AI-product strategy, RAG, agent workflows, governance, evaluations, data pipelines, and data architecture. Financial-services depth and AI-product experience are advantages, not prerequisites. Different industries, including public-sector work, are valid when the responsibilities match the demonstrated core. Avoid backend/software/data/ML-engineering IC work and hiring processes that require coding assessments.",
   coreExpertise: [
     "analytics leadership and executive decision support",
     "experimentation, A/B testing, multivariate testing, causal measurement, and conversion optimization",
@@ -35,6 +35,40 @@ export const TARGET_PROFILE = {
     workAuthorization: "The role must be compatible with F-1 OPT/STEM OPT and credible future sponsorship. Explicit incompatibility is a blocker; missing evidence requires review.",
     compensation: "The listed or credibly researched annual base must reach USD 170,000. A confirmed maximum below USD 170,000 is a blocker; missing evidence requires review.",
     codingInterview: "The hiring process must not require software-engineering-style coding, algorithms, data structures, LeetCode, or role-specific SQL/Python coding assessments. Explicit coding rounds are blockers. Engineering and coding-bound scientist IC archetypes are treated as near-certain blockers unless role-specific contrary evidence exists. Product/decision-science and data-science-management roles have elevated but unconfirmed risk and require review; analytics/strategy leadership has lower inferred risk but remains unverified until the company process is established.",
+  },
+  evaluationPolicy: {
+    rankingOrder: [
+      "demonstrated expertise and responsibility fit",
+      "F-1 OPT/STEM OPT compatibility and credible future sponsorship",
+      "annual base compensation of at least USD 170,000",
+      "no software-engineering-style or role-specific SQL/Python coding assessment",
+      "leadership scope, company quality, interview velocity, AI/ML adjacency, financial-services advantage, and remote flexibility",
+    ],
+    directCoreMatches: [
+      "analytics, insights, business intelligence, and executive decision support leadership",
+      "experimentation, A/B testing, multivariate testing, causal measurement, and conversion optimization",
+      "product, growth, funnel, KPI, customer-behavior, marketing, acquisition, retention, lifecycle, and commercial analytics",
+      "data-science management for marketing, customer, churn, spend, forecasting, sentiment, treatment, suppression, and NPV models",
+      "strategy analytics, decision science, business analytics, forecasting, and performance management",
+      "data products, clickstream capabilities, analytics platforms, and cross-functional zero-to-one product building",
+    ],
+    roleFitScale: {
+      5: "Direct match across several demonstrated core areas with comparable or greater ownership.",
+      4: "Strong match to at least one major demonstrated core area with credible scope.",
+      3: "Partial but substantive match that uses transferable demonstrated experience.",
+      2: "Adjacent role with limited use of demonstrated core experience.",
+      1: "Predominantly outside demonstrated expertise.",
+      0: "Clearly incompatible primary function.",
+    },
+    neverPenalizeCoreFitFor: [
+      "industry being outside financial services",
+      "public-sector context",
+      "lack of AI or generative-AI responsibilities",
+      "US onsite or hybrid work",
+      "lack of remote-from-India flexibility",
+      "missing compensation, sponsorship, or interview-process evidence; these are separate unknown gates",
+    ],
+    triageRule: "Triage answers only whether the primary responsibilities plausibly match the demonstrated core. Eligibility, compensation, coding-interview risk, company prestige, industry, AI content, and remote flexibility cannot make a functionally relevant role irrelevant.",
   },
   rankingWeights: {
     expertiseFit: 35,

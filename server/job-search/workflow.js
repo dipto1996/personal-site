@@ -71,7 +71,7 @@ import { normalizeTimestampInput } from "./utils.js";
 import { rotatingWatchlistCompanies } from "./watchlist.js";
 import { parseWorkerOutput } from "./worker-contract.js";
 
-export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v3";
+export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v4";
 
 const INTERVIEW_RISK_INSTRUCTIONS = "Infer interview risk from the role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work do not alone prove a coding round.";
 
@@ -169,7 +169,6 @@ function clearMismatchPromoted(job) {
 
 function shouldRefreshTriage(job) {
   return job?.details?.triageStatus === "complete"
-    && job?.details?.triage?.relevance === "irrelevant"
     && job?.details?.triagePromptVersion !== PROMPT_VERSION;
 }
 
@@ -178,15 +177,14 @@ function shouldQueueDeepForJob(job) {
   const relevance = job.details?.triage?.relevance;
   const staleEvaluation = Boolean(job.details?.deepEvaluation?.dimensions)
     && job.details?.evaluationFrameworkVersion !== EVALUATION_FRAMEWORK_VERSION;
-  if (staleEvaluation) return relevance === "relevant" || relevance === "uncertain" || clearMismatchPromoted(job);
+  if (staleEvaluation) return ["relevant", "uncertain", "irrelevant"].includes(relevance);
   if (job.details?.deepStatus === "complete" || job.details?.deepEvaluation) return false;
-  return relevance === "relevant" || relevance === "uncertain" || clearMismatchPromoted(job);
+  return ["relevant", "uncertain", "irrelevant"].includes(relevance);
 }
 
 function shouldQueueCriticForJob(job) {
   return Boolean(job?.details?.deepEvaluation)
     && (!job?.details?.evaluationFrameworkVersion || job.details.evaluationFrameworkVersion === EVALUATION_FRAMEWORK_VERSION)
-    && !(job?.details?.deepEvaluation?.decision?.blockers || []).length
     && job?.details?.criticStatus !== "complete";
 }
 
@@ -207,8 +205,9 @@ function nextLocalTaskType(job) {
 
 function localTaskPriority(job, taskType) {
   if (taskType === "triage") return 100;
-  if (taskType === "deep") return job?.details?.triage?.relevance === "relevant" ? 80 : 70;
-  if (taskType === "critic") return 60;
+  if (taskType === "deep") return job?.details?.triage?.relevance === "relevant" ? 80
+    : job?.details?.triage?.relevance === "uncertain" ? 70 : 60;
+  if (taskType === "critic") return 75;
   if (taskType === "outreach") return 30;
   return 0;
 }
@@ -465,11 +464,11 @@ function triageMessages(batch) {
   return [
     {
       role: "system",
-      content: "You are a high-recall career screener. Return compact JSON only. Never reject uncertainty. Classify responsibilities, not keyword overlap. confidence is certainty in the relevance label: use 0.9+ only for clear decisions and 0.4-0.8 for uncertainty, never 0 when reasons are decisive. Keep scopeSummary under 25 words and reasons/unknowns to at most three short items each.",
+      content: "You are a high-recall career-function screener. Return compact JSON only. Protect against false rejection: classify primary responsibilities against demonstrated experience, not title keywords, industry, eligibility, compensation, prestige, AI content, or remote-work preferences. confidence is certainty in the relevance label. Keep scopeSummary under 25 words and reasons/unknowns to at most three short items each.",
     },
     {
       role: "user",
-      content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nConstraints:\n${TARGET_PROFILE.avoid}\n${TARGET_PROFILE.targetGeography}\n\nEvaluate every job. Use relevance=irrelevant only for a clear primary-function mismatch. Analytics, experimentation, product analytics, marketing/customer analytics, strategy analytics, data-science management, decision science, data products, and cross-functional product-building are core matches in any industry. AI, financial services, and remote work are not prerequisites. Python, SQL, statistics, model building, or engineering partnership are not automatically coding-interview-heavy. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.\n\nJobs:\n${JSON.stringify(batch.map((job) => ({ sourceId: job.sourceId, title: job.title, company: job.company, location: job.location, description: job.description.slice(0, 4000) })), null, 2)}\n\nReturn {"jobs":[{"sourceId":"...","evaluation":{"roleFamilyId":"...","relevance":"relevant|uncertain|irrelevant","confidence":0.0,"scopeSummary":"...","codingIntensity":"low|medium|high|unknown","seniority":"too_junior|aligned|stretch|unknown","reasons":[],"unknowns":[]}}]}`,
+      content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nTriage policy:\n${JSON.stringify(TARGET_PROFILE.evaluationPolicy, null, 2)}\n\nEvaluate only primary responsibility fit. Data-science management, analytics leadership, experimentation, product/growth/marketing/customer analytics, strategy analytics, decision science, data products, Business Manager roles with analytical ownership, and cross-functional product building are direct or plausible matches. Different industries, public-sector work, lack of AI or financial-services content, US onsite/hybrid work, compensation, visa evidence, and interview format must not reduce relevance; those are separate later gates. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data science do not make the function irrelevant. Use irrelevant only when supplied responsibilities clearly show a predominantly unrelated function such as software implementation, pure data-engineering IC delivery, IT support, sales, legal, or clinical work. Use uncertain for incomplete, mixed, or plausibly transferable descriptions. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.\n\nJobs:\n${JSON.stringify(batch.map((job) => ({ sourceId: job.sourceId, title: job.title, company: job.company, location: job.location, description: job.description.slice(0, 4000) })), null, 2)}\n\nReturn {"jobs":[{"sourceId":"...","evaluation":{"roleFamilyId":"...","relevance":"relevant|uncertain|irrelevant","confidence":0.0,"scopeSummary":"...","codingIntensity":"low|medium|high|unknown","seniority":"too_junior|aligned|stretch|unknown","reasons":[],"unknowns":[]}}]}`,
     },
   ];
 }
@@ -499,7 +498,7 @@ async function triageJobs(jobs, runId) {
         results.push(await upsertJob({ ...job, status: "triage_pending", details: { ...job.details, triageStatus: "missing_result" } }));
         continue;
       }
-      const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.9;
+      const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.95;
       const status = reject ? "triage_rejected" : "deep_review_pending";
       const updated = await upsertJob({
         ...job,
@@ -674,7 +673,7 @@ function deepMessages(job, research, examples) {
     },
     {
       role: "user",
-      content: `Candidate:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nFour must-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nTarget geography: ${TARGET_PROFILE.targetGeography}\nCompensation: ${TARGET_PROFILE.compensation}\nWork authorization: ${TARGET_PROFILE.workAuthorization}\nAvoid: ${TARGET_PROFILE.avoid}\nRanking weights: ${JSON.stringify(TARGET_PROFILE.rankingWeights)}\n\nJob:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 12000), structuredCompensation: job.details?.sourceMetadata?.compensation || "" }, null, 2)}\n\nWeb evidence:\n${JSON.stringify(compactResearch, null, 2)}\n\nPrior owner feedback in this role family:\n${JSON.stringify(examples.slice(0, 8), null, 2)}\n\nEvaluate the four must-have gates first. status=blocked requires supported incompatibility; status=unknown means missing evidence; status=met requires support. Then score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null and evidenceStatus=unknown when evidence is missing; unknown is never 0. codingInterviewSafety 5 means low/no coding-interview risk and 0 means explicit high risk. interviewVelocity concerns process speed only. leadershipScope concerns responsibility only. Public-sector or non-financial-services context cannot reduce expertise fit or leadership scope when responsibilities match. AI/ML adjacency, financial-services overlap, and remote flexibility are bonuses, not prerequisites. US on-site/hybrid is acceptable when authorization is compatible. ${INTERVIEW_RISK_INSTRUCTIONS} A primarily engineering-implementation role is a function blocker. Missing compensation, visa, or interview evidence produces unknown and normally maybe, never pass by itself. Explicit no-current-or-future sponsorship, citizenship/clearance, a confirmed salary maximum below $170,000, or explicit coding interviews are blockers. Return a model recommendation; deterministic gates and weights produce the final verdict. Cite every explicit or inferred claim. Omit unsupported claims and preserve unknowns.`
+      content: `Candidate:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nEvaluation policy:\n${JSON.stringify(TARGET_PROFILE.evaluationPolicy, null, 2)}\n\nFour must-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nTarget geography: ${TARGET_PROFILE.targetGeography}\nCompensation: ${TARGET_PROFILE.compensation}\nWork authorization: ${TARGET_PROFILE.workAuthorization}\nAvoid: ${TARGET_PROFILE.avoid}\nRanking weights: ${JSON.stringify(TARGET_PROFILE.rankingWeights)}\n\nJob:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 12000), structuredCompensation: job.details?.sourceMetadata?.compensation || "" }, null, 2)}\n\nWeb evidence:\n${JSON.stringify(compactResearch, null, 2)}\n\nPrior owner feedback in this role family:\n${JSON.stringify(examples.slice(0, 8), null, 2)}\n\nIndependently evaluate the job from responsibilities and evidence; do not inherit triage as truth. First evaluate demonstrated expertise fit, work authorization, annual base compensation, and coding-interview safety. blocked requires supported incompatibility, unknown means missing or ambiguous evidence, and met requires support. Expertise fit is responsibility fit: 5 is direct across several demonstrated core areas, 4 is strong in a major core area, 3 is partial but substantive transferable fit, 2 is weak adjacency, and 0-1 is clearly unrelated. Never lower expertiseFit or leadershipScope because of public-sector or different-industry context, lack of AI or financial-services content, US onsite/hybrid work, lack of remote-from-India flexibility, or missing gate evidence. Score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null and evidenceStatus=unknown for missing evidence; unknown is never 0. Compensation means annual base or guaranteed cash, not total compensation. interviewVelocity means documented process speed only; companyQuality requires supplied evidence. ${INTERVIEW_RISK_INSTRUCTIONS} A primarily engineering-implementation role is an expertise blocker. Missing compensation, visa, or interview evidence produces unknown and maybe, never pass. Explicit no-current-or-future sponsorship, citizenship/clearance, confirmed annual-base maximum below $170,000, and explicit coding/SQL/Python assessments are blockers. AI/ML, financial-services overlap, remote flexibility, seniority, company quality, and interview velocity are bonuses after the four must-haves. Return a model recommendation; deterministic evidence gates and weights produce the final verdict. Cite every explicit or inferred claim, omit unsupported claims, and preserve unknowns.`
     },
   ];
 }
@@ -754,8 +753,8 @@ function criticMessages(job) {
     supportingPassage: String(claim.supportingPassage || "").slice(0, 500),
   }));
   return [
-    { role: "system", content: "Act as an independent skeptical career strategist. Return JSON only and use only supplied evidence. Prefer correcting an optimistic verdict over preserving model agreement." },
-    { role: "user", content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nMust-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nJob and primary evaluation:\n${JSON.stringify({ title: job.title, company: job.company, description: job.description.slice(0, 8000), primary: job.details?.deepEvaluation, evidence }, null, 2)}\n\nChallenge unsupported gate statuses, contradictions, hidden coding-interview risk, role-archetype risk classification, salary interpretation, and work-authorization evidence. Engineering and coding-bound scientist IC roles are near-certain coding risks absent contrary role-specific evidence; product/decision science and data-science management are elevated but not automatically blocked. Do not treat public-sector context, lack of AI, lack of financial-services overlap, or lack of remote work as a core mismatch when responsibilities fit analytics or experimentation. Missing facts remain unknown and should normally produce maybe unless another gate is explicitly blocked. Return agrees, recommendedVerdict, confidence, objections, unsupportedClaims, summary under 100 words.` },
+    { role: "system", content: "Act as an independent evaluation auditor. Return JSON only and use only supplied evidence. Look equally for false rejection and false optimism; do not preserve agreement for its own sake." },
+    { role: "user", content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nEvaluation policy:\n${JSON.stringify(TARGET_PROFILE.evaluationPolicy, null, 2)}\n\nMust-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nJob and primary evaluation:\n${JSON.stringify({ title: job.title, company: job.company, description: job.description.slice(0, 8000), primary: job.details?.deepEvaluation, evidence }, null, 2)}\n\nReconstruct the decision from scratch. Challenge responsibility-fit reasoning, unsupported gates, score/reason contradictions, annual-base versus total-compensation mistakes, unrelated-company or unrelated-role research, hidden coding-interview risk, and work-authorization evidence. Public-sector or different-industry context can still be a strong expertise match. Lack of AI, financial-services overlap, remote work, or prestige cannot reduce core fit. Missing evidence cannot become score 0, met, or blocked. Engineering and coding-bound scientist IC roles are near-certain coding risks absent contrary role-specific evidence; product/decision science and data-science management are elevated but not automatically blocked. A pass requires a supported blocker; unknown gates without a blocker require maybe. Return agrees, recommendedVerdict, confidence, objections, unsupportedClaims, and summary under 100 words. Put every material anomaly and its corrected gate or dimension in objections.` },
   ];
 }
 
@@ -785,8 +784,8 @@ async function criticJobs(jobs, runId) {
     const hardBlocked = (job.details?.deepEvaluation?.decision?.blockers || []).length > 0;
     reviewed.push(await upsertJob({
       ...job,
-      status: hardBlocked ? "passed"
-        : disagreement ? "needs_review"
+      status: disagreement ? "needs_review"
+        : hardBlocked ? "passed"
         : primaryVerdict === "apply" && calibration.active ? "shortlisted"
           : primaryVerdict === "pass" ? "passed" : "needs_review",
       details: {
@@ -1004,7 +1003,7 @@ export async function runLocalTriageEvaluation({ jobId, runId = null }) {
   });
   const evaluation = response.result?.jobs?.find((item) => item.sourceId === job.sourceId)?.evaluation;
   if (!evaluation) throw new Error(`Local triage failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
-  const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.9;
+  const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.95;
   const updated = await upsertJob({
     ...job,
     roleFamilyId: evaluation.roleFamilyId || job.roleFamilyId,
@@ -1086,8 +1085,8 @@ export async function runLocalCriticEvaluation({ jobId, runId = null }) {
   const calibration = await getCalibrationStatus();
   return upsertJob({
     ...job,
-    status: hardBlocked ? "passed"
-      : disagreement ? "needs_review"
+    status: disagreement ? "needs_review"
+      : hardBlocked ? "passed"
       : primaryVerdict === "apply" && calibration.active ? "shortlisted"
         : primaryVerdict === "pass" ? "passed" : "needs_review",
     details: {
@@ -1148,7 +1147,7 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
 
   if (task.taskType === "triage") {
     const evaluation = parsed.triage;
-    const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.9;
+    const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.95;
     await recordEvaluation({
       ...evaluationBase,
       id: deterministicWorkerEvaluationId(task.taskKey, "triage"),
@@ -1234,8 +1233,8 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
     const strongCandidate = !disagreement && result.recommendedVerdict === "apply";
     updated = await upsertJob({
       ...job,
-      status: hardBlocked ? "passed"
-        : disagreement ? "needs_review"
+      status: disagreement ? "needs_review"
+        : hardBlocked ? "passed"
         : strongCandidate && calibration.active ? "shortlisted"
           : result.recommendedVerdict === "pass" ? "passed" : "needs_review",
       details: {

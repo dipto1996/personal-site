@@ -1,6 +1,7 @@
 import { buildSearchPlan } from "./job-search/discovery.js";
 import { buildJobCardFacts } from "./job-search/card-facts.js";
 import { EVALUATION_FRAMEWORK_VERSION } from "./job-search/evaluation-framework.js";
+import { buildEvaluationAudit } from "./job-search/evaluation-audit.js";
 import { enqueueJobSearchRun } from "./job-search/inngest.js";
 import { ownerEmails, TARGET_PROFILE } from "./job-search/profile.js";
 import { getFreeProviderQuotaSummary, providerConfiguration, runFreeProviderCanary } from "./job-search/providers.js";
@@ -221,6 +222,12 @@ export async function getJobSearchUsage() {
     getFreeProviderQuotaSummary(),
   ]);
   return { ...usage, freeQuotas };
+}
+
+export async function getJobSearchEvaluationAudit({ sampleSize = 20, seed } = {}) {
+  await ensureJobSearchRepository();
+  const jobs = await listJobs({ view: "all", limit: 5000 });
+  return buildEvaluationAudit(jobs, { sampleSize, seed, promptVersion: PROMPT_VERSION });
 }
 
 export async function runJobSearchProviderCanary() {

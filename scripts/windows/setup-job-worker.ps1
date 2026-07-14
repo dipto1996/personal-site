@@ -30,7 +30,7 @@ $plainLength = $credential.GetNetworkCredential().Password.Length
 if ($plainLength -lt 32) { throw 'JOBSEARCH_WORKER_TOKEN must contain at least 32 characters.' }
 
 $config = [ordered]@{
-  protocolVersion = 'job-worker-2026-07-v1'
+  protocolVersion = 'job-worker-2026-07-v3'
   repositoryRoot = $script:RepositoryRoot
   endpoint = $Endpoint.TrimEnd('/')
   nodePath = (Resolve-Path -LiteralPath $NodePath).Path
@@ -42,9 +42,12 @@ $config = [ordered]@{
   modelBaseUrl = 'http://127.0.0.1:8080/v1'
   workerId = "$($env:COMPUTERNAME.ToLowerInvariant()):windows-job-worker"
   contextTokens = 8192
-  gpuLayers = 24
+  gpuLayers = 20
+  cpuThreads = 4
   concurrency = 1
   idleShutdownSeconds = 300
+  activeMinutes = 120
+  cooldownMinutes = 60
   configuredAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $config | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:WorkerConfigPath -Encoding utf8
@@ -53,7 +56,7 @@ if ($RegisterScheduledTask -and -not $SkipScheduledTask) {
   $startScript = Join-Path $PSScriptRoot 'start-job-worker.ps1'
   $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$startScript`" -Wait"
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-  $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+  $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
   Register-ScheduledTask -TaskName $script:WorkerTaskName -Action $action -Trigger $trigger -Settings $settings -Description 'Outbound-only local Qwen3-4B job intelligence worker.' -Force | Out-Null
 }
 
@@ -63,6 +66,8 @@ if ($RegisterScheduledTask -and -not $SkipScheduledTask) {
   model = $config.modelName
   contextTokens = $config.contextTokens
   concurrency = $config.concurrency
+  activeMinutes = $config.activeMinutes
+  cooldownMinutes = $config.cooldownMinutes
   credentialProtection = 'Windows DPAPI, current user'
   scheduledTask = ($RegisterScheduledTask -and -not $SkipScheduledTask)
   publicListener = $false

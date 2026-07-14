@@ -1,6 +1,6 @@
 # Job Search Decision System
 
-Version: `2026-07-14-analytics-first-v3`
+Version: `2026-07-14-analytics-first-v4`
 
 This is the auditable specification for discovery, title routing, LLM prompts, deterministic gates, and ranking. The executable definitions remain the source of truth in `server/job-search/profile.js`, `server/job-search/title-ontology.js`, `server/job-search/worker-contract.js`, and `server/job-search/evaluation-framework.js`.
 
@@ -100,7 +100,7 @@ The exact final-decision order is:
 1. Normalize every model dimension to 0-5 or null.
 2. Recompute work authorization, compensation, and coding-interview gates from stored evidence.
 3. Expertise is blocked for an excluded engineering function or model expertiseFit < 2.5.
-4. Expertise is met for model expertiseFit >= 2.5; if absent, an eligible title is an inferred provisional match.
+4. Expertise is met for model expertiseFit >= 2.5; if absent, an eligible title keeps expertise unknown until responsibilities establish fit.
 5. Replace blocked gate dimensions with 0; replace a met-but-unscored gate with 4.
 6. For unknown coding risk only, use archetype suggestion 2 (elevated) or 4 (low); the gate remains unknown.
 7. Weighted score = sum((dimensionScore or neutral 2.5) / 5 * dimensionWeight).
@@ -138,12 +138,12 @@ Dynamic fields below are enclosed in braces. The Windows worker uses Qwen with J
 
 Every call uses temperature `0.1`. The local server receives `/think` for deep and critic calls, `/no_think` for triage/outreach, prompt caching, a 10-minute timeout, and schema-constrained JSON. Cloud calls have a 90-second timeout and use JSON Schema where supported, otherwise JSON-object mode.
 
-### 1. Triage
+### 1A. Windows-worker triage
 
 **System**
 
 ```text
-You are a high-recall career screener. Return JSON only. Never reject uncertainty and classify responsibilities rather than keyword overlap.
+You are a high-recall career-function screener. Return JSON only. Protect against false rejection: classify the job's primary responsibilities against demonstrated experience, not title keywords, industry, eligibility, compensation, prestige, AI content, or remote-work preferences.
 ```
 
 **User**
@@ -152,31 +152,37 @@ You are a high-recall career screener. Return JSON only. Never reject uncertaint
 Candidate profile: {baseline}
 Core expertise, in priority order: {coreExpertise}
 Additional differentiators, not prerequisites: {differentiators}
-Constraints: {avoid} {targetGeography}
+Triage policy: {evaluationPolicy}
 Job: {job}
 
-Use relevance=irrelevant only for a clear primary-function mismatch. Analytics, experimentation, product analytics, marketing/customer analytics, strategy analytics, data-science management, decision science, data products, and cross-functional product-building are core matches in any industry. Do not require AI or financial-services content. A role mentioning Python, SQL, statistics, model building, or engineering partnership is not automatically coding-interview-heavy. Return one triage object using a canonical roleFamilyId.
+Decide only whether the primary responsibilities plausibly use the candidate's demonstrated expertise. Data Science Manager, Analytics Manager/Director, Product Analytics, Experimentation, Marketing/Customer/Growth Analytics, Decision Science, Strategy Analytics, Data Products, Business Manager with analytical ownership, and cross-functional product-builder roles are direct or plausible matches. Different industries, public-sector work, lack of AI, lack of financial-services content, US onsite/hybrid work, compensation, visa evidence, and interview format must not reduce relevance; those are separate later gates. Python, SQL, statistics, predictive modeling, and experimentation inside analytics or data science do not make the function irrelevant. Use relevance=irrelevant only when supplied responsibilities clearly show a predominantly unrelated primary function such as software implementation, pure data-engineering IC delivery, IT support, sales, legal, clinical, or another non-core track. If the description is incomplete, mixed, or plausibly transferable, use uncertain. Return one triage object using a canonical roleFamilyId.
 ```
 
-The synchronous cloud batch variant has this exact system prompt:
+### 1B. Cloud-batch triage
+
+**System**
 
 ```text
-You are a high-recall career screener. Return compact JSON only. Never reject uncertainty. Classify responsibilities, not keyword overlap. confidence is certainty in the relevance label: use 0.9+ only for clear decisions and 0.4-0.8 for uncertainty, never 0 when reasons are decisive. Keep scopeSummary under 25 words and reasons/unknowns to at most three short items each.
+You are a high-recall career-function screener. Return compact JSON only. Protect against false rejection: classify primary responsibilities against demonstrated experience, not title keywords, industry, eligibility, compensation, prestige, AI content, or remote-work preferences. confidence is certainty in the relevance label. Keep scopeSummary under 25 words and reasons/unknowns to at most three short items each.
 ```
 
-Its user prompt contains the same candidate/profile blocks, then this exact instruction and up to three jobs:
+**User**
 
 ```text
-Evaluate every job. Use relevance=irrelevant only for a clear primary-function mismatch. Analytics, experimentation, product analytics, marketing/customer analytics, strategy analytics, data-science management, decision science, data products, and cross-functional product-building are core matches in any industry. AI, financial services, and remote work are not prerequisites. Python, SQL, statistics, model building, or engineering partnership are not automatically coding-interview-heavy. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.
+Candidate profile: {baseline}
+Core expertise: {coreExpertise}
+Differentiators, not prerequisites: {differentiators}
+Triage policy: {evaluationPolicy}
+
+Evaluate only primary responsibility fit. Data-science management, analytics leadership, experimentation, product/growth/marketing/customer analytics, strategy analytics, decision science, data products, Business Manager roles with analytical ownership, and cross-functional product building are direct or plausible matches. Different industries, public-sector work, lack of AI or financial-services content, US onsite/hybrid work, compensation, visa evidence, and interview format must not reduce relevance; those are separate later gates. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data science do not make the function irrelevant. Use irrelevant only when supplied responsibilities clearly show a predominantly unrelated function such as software implementation, pure data-engineering IC delivery, IT support, sales, legal, or clinical work. Use uncertain for incomplete, mixed, or plausibly transferable descriptions. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.
 
 Jobs: {jobs}
-
 Return {"jobs":[{"sourceId":"...","evaluation":{"roleFamilyId":"...","relevance":"relevant|uncertain|irrelevant","confidence":0.0,"scopeSummary":"...","codingIntensity":"low|medium|high|unknown","seniority":"too_junior|aligned|stretch|unknown","reasons":[],"unknowns":[]}}]}
 ```
 
-Only `relevance=irrelevant` with confidence at least `0.90` becomes a clear mismatch. Every other result goes to deep review.
+Only `relevance=irrelevant` with confidence at least `0.95` becomes a clear mismatch. Every candidate, including a clear mismatch, remains eligible for deep evaluation and critic review in the local backlog.
 
-### 2. Evidence Extraction
+### 2. Evidence extraction
 
 **System**
 
@@ -190,10 +196,10 @@ Extract only facts supported by the supplied job description and evidence. Retur
 Job: {job}
 Evidence: {evidence}
 
-Return at most 6 highest-priority claims, favoring eligibility, compensation, and coding/interview evidence. Keep each value under 180 characters and each supporting passage under 240 characters. Every explicit or inferred claim must include a sourceUrl and a supportingPassage drawn from the supplied material. Do not use model memory.
+Return at most 6 highest-priority claims, favoring: job-level sponsorship or work-authorization restrictions; annual base salary rather than total compensation; explicit interview stages or assessments; and primary responsibilities proving expertise fit. Distinguish job-level evidence from employer-level history, annual base from total compensation, and explicit interview evidence from archetype inference. Keep each value under 180 characters and each supporting passage under 240 characters. Every explicit or inferred claim must include a sourceUrl and an exact supportingPassage drawn from the supplied material. List each material missing fact in unknowns. Do not use model memory.
 ```
 
-### 3. Deep Evaluation
+### 3. Deep evaluation
 
 **System**
 
@@ -207,6 +213,7 @@ You are a rigorous career strategist. Return JSON only. Ground every material fa
 Candidate: {baseline}
 Core expertise: {coreExpertise}
 Differentiators, not prerequisites: {differentiators}
+Evaluation policy: {evaluationPolicy}
 Four must-have gates: {hardRequirements}
 Target geography: {targetGeography}
 Compensation: {compensation}
@@ -217,7 +224,7 @@ Job: {job}
 Validated evidence extraction: {extraction}
 Prior owner feedback: {feedbackExamples}
 
-Evaluate the four must-have gates first. blocked requires supported incompatibility, unknown means missing evidence, and met requires support. Score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null for unknown evidence; never convert unknown to 0. codingInterviewSafety 5 means low/no coding-interview risk. interviewVelocity concerns process speed only. leadershipScope concerns responsibility only. Public-sector or non-financial-services work cannot reduce expertise fit or leadership scope when responsibilities match. AI/ML, financial-services, and remote are bonuses. US on-site/hybrid is acceptable when authorization is compatible. Infer interview risk from role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, experimentation, and model development within analytics/data-science work do not alone prove a coding round. Missing compensation, visa, or interview evidence means maybe, not pass. Explicit no-current-or-future sponsorship, citizenship/clearance, salary maximum below $170,000, or explicit coding interviews are blockers. The server applies final gates and weights. Cite every non-unknown claim.
+Independently evaluate the job from its responsibilities and supplied evidence; do not inherit the triage label as truth. First evaluate four must-have gates: demonstrated expertise fit, work authorization, annual base compensation, and coding-interview safety. blocked requires supported incompatibility, unknown means missing or ambiguous evidence, and met requires support. Expertise fit is responsibility fit: 5 is a direct match across several demonstrated core areas, 4 is a strong match to a major core area, 3 is partial but substantive transferable fit, 2 is weak adjacency, and 0-1 is a clearly unrelated primary function. Data-science management for marketing/customer models, analytics leadership, experimentation, product/growth/marketing/customer analytics, strategy analytics, decision science, data products, and analytical product-building are demonstrated core experience. Never lower expertiseFit or leadershipScope because a role is public sector, outside financial services, lacks AI, is onsite/hybrid in the US, lacks remote-from-India flexibility, or has missing eligibility/pay/interview evidence. Those facts belong only in their own dimensions or gates. Then score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null and evidenceStatus=unknown when evidence is missing; never convert unknown to 0. Compensation means annual base or clearly comparable guaranteed cash, not total compensation or speculative equity. interviewVelocity means documented process speed only and must be null if unsupported. companyQuality must be null when no company evidence is supplied. codingInterviewSafety 5 means verified no-coding process and 0 means a supported blocker. Infer interview risk from the role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work do not alone prove a coding round. A primarily engineering-implementation role is an expertise blocker. Missing compensation, visa, or interview evidence must produce unknown gates and maybe, never pass. Explicit no-current-or-future sponsorship, citizenship/clearance, confirmed annual-base maximum below $170,000, and explicit coding/SQL/Python assessment are blockers. AI/ML adjacency, financial-services overlap, remote flexibility, seniority, company quality, and interview velocity are bonuses after the four must-haves. Return a model recommendation; the server recomputes evidence gates, weights, and final verdict. Keep reasoning concise. Every explicit or inferred factual claim must cite supplied evidence; otherwise preserve it as unknown.
 ```
 
 ### 4. Critic
@@ -233,10 +240,11 @@ Act as an independent skeptical career strategist. Return JSON only and use only
 ```text
 Candidate profile: {baseline}
 Core expertise: {coreExpertise}
+Evaluation policy: {evaluationPolicy}
 Four must-have gates: {hardRequirements}
 Job, primary evaluation, and evidence: {jobAndEvaluation}
 
-Challenge unsupported gate statuses, contradictions, hidden coding-interview risk, role-archetype risk classification, salary interpretation, and work-authorization evidence. Engineering and coding-bound scientist IC roles are near-certain coding risks absent contrary role-specific evidence; product/decision science and data-science management are elevated but not automatically blocked. Do not treat industry mismatch, lack of AI, lack of remote work, or public-sector context as a core role-fit failure when responsibilities match. apply means pursue, maybe means manual review, and pass means reject. Missing facts remain unknown and normally cause maybe unless another must-have gate is explicitly blocked.
+Audit the evaluation from scratch. Look equally for false rejection and false optimism. Challenge responsibility-fit reasoning, unsupported gate statuses, score/reason contradictions, annual-base versus total-compensation mistakes, unrelated-company or unrelated-role research, hidden coding-interview risk, and work-authorization evidence. A public-sector or different-industry role can still be a strong expertise match. Lack of AI, financial-services overlap, remote work, or employer prestige cannot reduce core fit. Missing evidence cannot become score 0, met, or blocked. Engineering and coding-bound scientist IC roles are near-certain coding risks absent contrary role-specific evidence; product/decision science and data-science management are elevated but not automatically blocked; analytics/strategy leadership is lower risk but unverified. A pass requires at least one supported blocker; unknown gates without a blocker require maybe. apply means pursue, maybe means manual review, and pass means reject. Set agrees=true exactly when recommendedVerdict equals the primary final verdict. In objections, identify every material anomaly and state the corrected gate or dimension.
 ```
 
 ### 5. Outreach
@@ -251,13 +259,12 @@ Write a concise truthful outreach note. Return JSON only. Never invent facts or 
 
 ```text
 Candidate identity: {outreachIdentity}
-Candidate background: {baseline}
 Job and evidence: {jobAndEvidence}
 
-Return a subject and message under 170 words. Lead with the candidate experience most relevant to this role. Mention work authorization only when explicitly supported, and never imply permanent authorization.
+Return a subject and message under 170 words. Mention work authorization only when explicitly supported and never imply permanent authorization.
 ```
 
-### 6. Title-Taxonomy Proposal
+### 6. Title-taxonomy proposal
 
 **System**
 
@@ -269,14 +276,14 @@ Map a job title to the candidate's role taxonomy. Return JSON only. Do not write
 
 ```text
 Title: {observedTitle}
-Allowed families: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership. Return familyId, familyLabel, confidence, and rationale. If no family is appropriate, use exploratory.
+Allowed families: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership. Return familyId, familyLabel, confidence, rationale. If no family is appropriate, use familyId=exploratory.
 ```
 
-The model can propose a literal exact or token-set alias. The server safely compiles it, tests it against every owner-labelled job, and controls promotion or rollback. The model never writes executable regular expressions.
+The model proposes only a literal alias. The server compiles, regression-tests, promotes, and rolls it back; the model never writes executable regular expressions.
 
-### 7. Provider Canary
+### 7. Provider canary
 
-This is health checking only and never evaluates a job.
+This health check never evaluates a job.
 
 **System**
 
@@ -312,4 +319,10 @@ Routes are tried in this exact order; a failure or exhausted free quota advances
 | Critic | local Qwen3-4B think; Cloudflare Llama 3.3 70B; OpenRouter free; Groq GPT-OSS-120B; paid Kimi K2.5 |
 | Utility | local Qwen3-4B no-think; Cloudflare Llama 3.1 8B; Groq GPT-OSS-120B; OpenRouter free; GLM-4.7-Flash |
 
-The Windows worker performs deep evaluation in two separate calls: evidence extraction (maximum 1,800 output tokens) and evaluation (maximum 2,400). Triage is capped at 900, critic at 900, and outreach at 500. The worker runs one job at a time with an 8,192-token context and a 12,000-character job-description cap.
+The Windows worker performs deep evaluation in two separate calls: evidence extraction (maximum 1,800 output tokens) and evaluation (maximum 2,400). Triage is capped at 900, critic at 900, and outreach at 500. Every selected candidate, including a triage clear mismatch, receives a deep evaluation and then an independent critic. The worker runs one job at a time with an 8,192-token context, a 12,000-character job-description cap, four CPU threads, and at most 20 GPU layers.
+
+The worker uses a persisted thermal schedule: 120 active minutes followed by 60 cooldown minutes. It finishes an in-flight task, stops `llama-server`, reports `cooling_down`, and does not claim another task until cooldown ends. It also stops early at 80 C GPU temperature, refuses model startup at 72 C or above, and starts the scheduled task only under Windows' default AC-power policy.
+
+## Evaluation Audit
+
+`GET /api/job-search/audit?sampleSize=20&seed={seed}` is owner-only. It chooses a reproducible random sample from jobs with a current deep evaluation and critic, and checks the full population for stale prompts, incomplete stages, gate/verdict contradictions, unknown facts scored as zero, ungrounded claims or gates, evaluator/critic contradictions, disagreement not routed to review, and prohibited fit penalties based on industry, public-sector context, AI adjacency, or remote-from-India preference.

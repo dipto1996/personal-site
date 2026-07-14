@@ -115,6 +115,29 @@ async function loadInsightBackend(tempDir) {
   };
 }
 
+test("job-search evaluation audit is owner-gated and returns a deterministic sample contract", async () => {
+  process.env.JOBSEARCH_ALLOW_ANY_SIGNED_IN = "true";
+  const server = await startServer();
+  try {
+    const unauthorized = await jsonFetch(server.baseUrl, "/api/job-search/audit?sampleSize=20&seed=api-test");
+    assert.equal(unauthorized.response.status, 401);
+
+    const sessionResult = await jsonFetch(server.baseUrl, "/api/demo-login", { method: "POST" });
+    const cookie = sessionResult.response.headers.get("set-cookie");
+    const response = await jsonFetch(server.baseUrl, "/api/job-search/audit?sampleSize=20&seed=api-test", {
+      headers: { cookie },
+    });
+    assert.equal(response.response.status, 200);
+    assert.equal(response.payload.audit.seed, "api-test");
+    assert.equal(response.payload.audit.requestedSampleSize, 20);
+    assert.ok(Array.isArray(response.payload.audit.sample));
+    assert.equal(typeof response.payload.audit.population.automatedAnomalies, "number");
+  } finally {
+    delete process.env.JOBSEARCH_ALLOW_ANY_SIGNED_IN;
+    await server.close();
+  }
+});
+
 test("Windows worker endpoints require a token and commit triage results idempotently", async () => {
   const server = await startServer();
   const token = process.env.JOBSEARCH_WORKER_TOKEN;

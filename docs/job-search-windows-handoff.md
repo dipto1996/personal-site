@@ -1,6 +1,6 @@
 # Windows Job-Search Worker Handoff
 
-Updated: 2026-07-13
+Updated: 2026-07-14
 
 ## Objective
 
@@ -43,14 +43,14 @@ The counts are a point-in-time snapshot and can increase as discovery continues.
 4. Bind `llama.cpp` to `127.0.0.1`; no inbound firewall rule, public listener, VPN, or tunnel.
 5. Process one task at a time with idempotent leases. Retry interrupted work without duplicating
    completed evaluations.
-6. Start the model only when the queue contains work and stop it after five idle minutes.
+6. Start the model only when the queue contains work, stop it after five idle minutes, and enforce a persisted two-hour active / one-hour cooldown cycle.
 
 ## Model Decision
 
 Inspect Windows RAM, CPU, GPU, and VRAM before downloading a model.
 
 - Use Qwen3-4B Q4_K_M with an 8K context for this measured 16 GB / 6 GB VRAM host.
-- Offload 24 layers to the NVIDIA GPU; keep the remainder on CPU to preserve driver and desktop headroom.
+- Offload at most 20 layers to the NVIDIA GPU and use four CPU threads to preserve driver and desktop headroom.
 - Do not use a local model on an 8 GB machine.
 - Never select or download a larger model automatically.
 
@@ -64,6 +64,8 @@ Runtime guardrails:
 - Circuit breaker when the model is unhealthy
 - Periodic heartbeat during generation
 - Automatic idle shutdown
+- Two active hours followed by one model-off cooldown hour
+- Refuse startup at 72 C GPU temperature and enter cooldown at 80 C during processing
 
 ## Reasoning Pipeline
 
@@ -126,7 +128,7 @@ Do not release the production backlog until the Windows model achieves:
 
 - Persistent checkout: `C:\Users\Riju\OneDrive_v1\Desktop\personal-site`
 - Branch/commit received: `codex/windows-job-worker-handoff` at `3f52ed854de659e199f39e4d064662c9ff85e9cc`
-- Selected model: `Qwen3-4B-Q4_K_M`, context 4096, concurrency 1
+- Selected model: `Qwen3-4B-Q4_K_M`, context 8192, concurrency 1
 - Runtime: official llama.cpp `b9987` Windows Vulkan build, loopback only
 - Worker boundary implemented under `/api/job-search/worker/*`
 - Collector batch boundary implemented at `/api/job-search/worker/discovery-batch`; Windows never receives `DATABASE_URL`

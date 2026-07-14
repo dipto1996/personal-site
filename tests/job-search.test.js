@@ -26,6 +26,8 @@ const providers = await import("../server/job-search/providers.js");
 const schemas = await import("../server/job-search/schemas.js");
 const cardFacts = await import("../server/job-search/card-facts.js");
 const workflow = await import("../server/job-search/workflow.js");
+const evaluationFramework = await import("../server/job-search/evaluation-framework.js");
+const evaluationAudit = await import("../server/job-search/evaluation-audit.js");
 const workerContract = await import("../server/job-search/worker-contract.js");
 const targetProfile = await import("../server/job-search/profile.js");
 const resourceGuard = await import("../scripts/job-search-windows-resource-guard.mjs");
@@ -73,6 +75,114 @@ async function seedJob(overrides = {}) {
     details: overrides.details || {},
   });
 }
+
+function auditReadyJob(overrides = {}) {
+  const job = {
+    id: "audit-job-1",
+    sourceId: "audit-source-1",
+    canonicalUrl: "https://example.com/jobs/analytics-manager",
+    title: "Senior Analytics Manager",
+    normalizedTitle: "senior analytics manager",
+    company: "Example",
+    location: "New York, NY",
+    description: "Lead product analytics, experimentation, and customer measurement. Interview and salary details are not provided.",
+    sourceProvider: "test",
+    roleFamilyId: "analytics_leadership",
+    status: "needs_review",
+    disposition: null,
+    details: {},
+    ...overrides,
+  };
+  const modelEvaluation = {
+    verdict: "maybe",
+    overallScore: 70,
+    summary: "Strong analytics leadership fit; eligibility details require review.",
+    dimensions: Object.fromEntries(Object.keys(evaluationFramework.EVALUATION_WEIGHTS).map((key) => [key, {
+      score: key === "expertiseFit" ? 4 : null,
+      evidenceStatus: key === "expertiseFit" ? "inferred" : "unknown",
+      confidence: key === "expertiseFit" ? 0.85 : 0,
+      reasoning: key === "expertiseFit" ? "Responsibilities directly use analytics leadership and experimentation experience." : "Evidence not established.",
+    }])),
+    mustHave: {
+      expertiseFit: { status: "met", evidenceStatus: "inferred", reasoning: "Strong responsibility fit.", sourceUrl: job.canonicalUrl },
+      workAuthorization: { status: "unknown", evidenceStatus: "unknown", reasoning: "Not verified.", sourceUrl: "" },
+      compensation: { status: "unknown", evidenceStatus: "unknown", reasoning: "Not verified.", sourceUrl: "" },
+      codingInterview: { status: "unknown", evidenceStatus: "unknown", reasoning: "Not verified.", sourceUrl: "" },
+    },
+    claims: [], redFlags: [], greenFlags: [], unknowns: [], outreachAngle: "",
+  };
+  const deepEvaluation = evaluationFramework.finalizeDeepEvaluation(job, modelEvaluation);
+  job.details = {
+    triageStatus: "complete",
+    triagePromptVersion: workflow.PROMPT_VERSION,
+    triage: { relevance: "relevant", confidence: 0.9 },
+    deepStatus: "complete",
+    evaluationFrameworkVersion: evaluationFramework.EVALUATION_FRAMEWORK_VERSION,
+    deepEvaluation,
+    claims: [],
+    criticStatus: "complete",
+    critic: {
+      agrees: true,
+      recommendedVerdict: deepEvaluation.verdict,
+      confidence: 0.85,
+      objections: [],
+      unsupportedClaims: [],
+      summary: "The evidence and provisional verdict are coherent.",
+    },
+    modelAgreement: "agree",
+  };
+  return job;
+}
+
+test("evaluation audit accepts a coherent current evaluator-and-critic result", () => {
+  const job = auditReadyJob();
+  assert.deepEqual(evaluationAudit.auditJobEvaluation(job, { promptVersion: workflow.PROMPT_VERSION }), []);
+  const audit = evaluationAudit.buildEvaluationAudit([job], {
+    sampleSize: 20,
+    seed: "stable-audit-seed",
+    promptVersion: workflow.PROMPT_VERSION,
+  });
+  assert.equal(audit.population.currentDeepAndCritic, 1);
+  assert.equal(audit.population.automatedAnomalies, 0);
+  assert.equal(audit.sample.length, 1);
+  assert.equal(audit.sample[0].id, job.id);
+});
+
+test("evaluation audit detects stale, contradictory, ungrounded, and biased output", () => {
+  const job = auditReadyJob();
+  job.status = "passed";
+  job.details.triagePromptVersion = "old-prompt";
+  job.details.deepEvaluation.verdict = "pass";
+  job.details.deepEvaluation.summary = "This public-sector role does not match because it is outside financial services and lacks remote-from-India flexibility.";
+  job.details.deepEvaluation.dimensions.compensation = {
+    score: 0,
+    evidenceStatus: "unknown",
+    confidence: 0,
+    reasoning: "Compensation is missing.",
+  };
+  job.details.claims = [{
+    claimType: "salary",
+    value: "$200,000",
+    sourceUrl: "",
+    supportingPassage: "",
+    sourceDate: "",
+    confidence: 0.8,
+    evidenceType: "inferred",
+  }];
+  job.details.critic = {
+    ...job.details.critic,
+    agrees: true,
+    recommendedVerdict: "maybe",
+  };
+  const codes = new Set(evaluationAudit.auditJobEvaluation(job, { promptVersion: workflow.PROMPT_VERSION }).map((finding) => finding.code));
+  assert.ok(codes.has("stale_triage_prompt"));
+  assert.ok(codes.has("verdict_gate_contradiction"));
+  assert.ok(codes.has("unknown_dimension_scored"));
+  assert.ok(codes.has("ungrounded_claim"));
+  assert.ok(codes.has("industry_used_as_fit_penalty"));
+  assert.ok(codes.has("remote_used_as_fit_penalty"));
+  assert.ok(codes.has("critic_agreement_contradiction"));
+});
 
 test("title normalization and all eight seeded families route deterministically", () => {
   const patterns = taxonomy.seedTitlePatterns();
@@ -336,6 +446,46 @@ test("new task revisions supersede stale stages and downstream work", async () =
   assert.equal(tasks.find((task) => task.id === latestDeep.id).status, "queued");
 });
 
+test("every current deep evaluation, including a hard-blocked pass, receives an independent critic task", async () => {
+  const job = await seedJob({
+    sourceId: "blocked_job_needs_critic",
+    status: "passed",
+    details: {
+      triageStatus: "complete",
+      triagePromptVersion: workflow.PROMPT_VERSION,
+      triage: { relevance: "irrelevant", confidence: 0.99, codingIntensity: "high" },
+      deepStatus: "complete",
+      evaluationFrameworkVersion: evaluationFramework.EVALUATION_FRAMEWORK_VERSION,
+      deepEvaluation: {
+        verdict: "pass",
+        overallScore: 20,
+        decision: { blockers: ["codingInterview"], unknowns: [] },
+      },
+      criticStatus: "pending",
+    },
+  });
+  const task = await workflow.enqueueNextWindowsTask(job);
+  assert.equal(task.taskType, "critic");
+});
+
+test("a prompt-version change re-triages every prior relevance class", async () => {
+  for (const relevance of ["relevant", "uncertain", "irrelevant"]) {
+    const job = await seedJob({
+      sourceId: `stale_prompt_${relevance}`,
+      details: {
+        triageStatus: "complete",
+        triagePromptVersion: "obsolete-prompt",
+        triage: { relevance, confidence: 0.9, codingIntensity: "unknown" },
+        deepStatus: "complete",
+        evaluationFrameworkVersion: "obsolete-framework",
+        deepEvaluation: { verdict: "maybe", overallScore: 50, dimensions: {} },
+      },
+    });
+    const task = await workflow.enqueueNextWindowsTask(job);
+    assert.equal(task.taskType, "triage", relevance);
+  }
+});
+
 test("queue hold and controlled release preserve history and only activate the released cohort", async () => {
   process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
   try {
@@ -345,6 +495,7 @@ test("queue hold and controlled release preserve history and only activate the r
         status: "deep_review_pending",
         details: {
           triageStatus: "complete",
+          triagePromptVersion: workflow.PROMPT_VERSION,
           triage: { relevance: index < 10 ? "relevant" : "uncertain", confidence: 0.8, codingIntensity: "low" },
         },
       });
@@ -357,8 +508,10 @@ test("queue hold and controlled release preserve history and only activate the r
         status: "critic_pending",
         details: {
           triageStatus: "complete",
+          triagePromptVersion: workflow.PROMPT_VERSION,
           triage: { relevance: "relevant", confidence: 0.9, codingIntensity: "low" },
           deepStatus: "complete",
+          evaluationFrameworkVersion: evaluationFramework.EVALUATION_FRAMEWORK_VERSION,
           deepEvaluation: { verdict: "apply", overallScore: 90 - index },
         },
       });
@@ -375,8 +528,10 @@ test("queue hold and controlled release preserve history and only activate the r
       status: "needs_review",
       details: {
         triageStatus: "complete",
+        triagePromptVersion: workflow.PROMPT_VERSION,
         triage: { relevance: "relevant", confidence: 0.95, codingIntensity: "low" },
         deepStatus: "complete",
+        evaluationFrameworkVersion: evaluationFramework.EVALUATION_FRAMEWORK_VERSION,
         deepEvaluation: { verdict: "apply", overallScore: 92 },
         criticStatus: "complete",
         critic: { agrees: true, recommendedVerdict: "apply", confidence: 0.9 },
@@ -388,6 +543,7 @@ test("queue hold and controlled release preserve history and only activate the r
       status: "triage_rejected",
       details: {
         triageStatus: "complete",
+        triagePromptVersion: workflow.PROMPT_VERSION,
         triage: { relevance: "irrelevant", confidence: 0.98, codingIntensity: "low" },
       },
     });
@@ -398,6 +554,7 @@ test("queue hold and controlled release preserve history and only activate the r
       disposition: "maybe",
       details: {
         triageStatus: "complete",
+        triagePromptVersion: workflow.PROMPT_VERSION,
         triage: { relevance: "irrelevant", confidence: 0.95, codingIntensity: "low" },
       },
     });
@@ -422,7 +579,7 @@ test("queue hold and controlled release preserve history and only activate the r
     assert.equal(release.queueControlAfter.activeReleaseJobIds.length, 20);
     assert.equal(release.selected.some((item) => item.sourceId === "held_collector_triage"), true);
     assert.equal(release.selected.some((item) => item.sourceId === "held_outreach"), true);
-    assert.equal(release.selected.some((item) => item.sourceId === "clear_mismatch_not_promoted"), false);
+    assert.equal(release.selected.some((item) => item.sourceId === "clear_mismatch_not_promoted"), true);
     assert.equal(release.selected.some((item) => item.sourceId === "clear_mismatch_promoted"), true);
 
     const claim = await repository.claimLocalTask({ workerId: "migration-test-worker" });
@@ -605,6 +762,14 @@ test("maximal Windows worker packet fits the 8192 context budget and retains pri
   });
   assert.ok(evaluationPass.promptCharacters <= workerContract.WORKER_LIMITS.maxPromptCharacters);
   assert.equal(evaluationPass.maxTokens, 2400);
+  assert.equal(extractionPass.thinking, false);
+  assert.equal(evaluationPass.thinking, true);
+  const criticPass = workerContract.getWorkerPass("critic", "evaluate", {
+    ...packet,
+    task: { ...packet.task, taskType: "critic" },
+    job: { ...packet.job, deepEvaluation: { verdict: "maybe" } },
+  });
+  assert.equal(criticPass.thinking, true);
 });
 
 test("Windows collector launcher quotes paths and status uses the live resource phase", async () => {
@@ -617,9 +782,14 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(collectorScript, /ConvertTo-ProcessArgument "--chrome=\$\(\$config\.chromePath\)"/);
   assert.match(collectorScript, /ConvertTo-ProcessArgument '--run-label=Scheduled Windows collector'/);
   assert.match(statusScript, /if \(\$process\) \{ @\(\) \} else \{ @\('--startup'\) \}/);
-  assert.match(setupScript, /gpuLayers = 24/);
+  assert.match(setupScript, /gpuLayers = 20/);
+  assert.match(setupScript, /activeMinutes = 120/);
+  assert.match(setupScript, /cooldownMinutes = 60/);
   assert.match(startScript, /JOBSEARCH_LOCAL_GPU_LAYERS/);
-  assert.match(workerScript, /JOBSEARCH_LOCAL_GPU_LAYERS \|\| 24/);
+  assert.match(startScript, /JOBSEARCH_WORKER_ACTIVE_MINUTES/);
+  assert.match(workerScript, /JOBSEARCH_LOCAL_GPU_LAYERS \|\| 20/);
+  assert.match(workerScript, /scheduled_two_hour_limit/);
+  assert.match(workerScript, /pass\.thinking \? "think" : "no_think"/);
   assert.match(workerScript, /resource_wait_before_claim/);
   assert.ok(workerScript.indexOf("resourcesReadyBeforeClaim()") < workerScript.indexOf('workerFetch("claim"'));
 });
@@ -632,7 +802,7 @@ test("Windows resource guard permits this model tier and always rejects Qwen3-14
     memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 8 * (1024 ** 3) },
     disk: { freeBytes: 100 * (1024 ** 3) },
     cpu: { loadPercent: 25 },
-    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500, temperatureCelsius: 65 },
   }, { phase: "startup" });
   assert.equal(evaluation.ok, true);
   assert.equal(evaluation.summary.totalVramMiB, 6144);
@@ -640,9 +810,17 @@ test("Windows resource guard permits this model tier and always rejects Qwen3-14
     memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 3 * (1024 ** 3) },
     disk: { freeBytes: 100 * (1024 ** 3) },
     cpu: { loadPercent: 25 },
-    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 2300 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 2300, temperatureCelsius: 75 },
   }, { phase: "runtime" });
   assert.equal(runtime.ok, true);
+  const hot = resourceGuard.evaluateResourceGuard({
+    memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 8 * (1024 ** 3) },
+    disk: { freeBytes: 100 * (1024 ** 3) },
+    cpu: { loadPercent: 25 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500, temperatureCelsius: 80 },
+  }, { phase: "startup" });
+  assert.equal(hot.ok, false);
+  assert.match(hot.reasons.join(" "), /GPU temperature/);
 });
 
 test("Windows worker circuit breaker distinguishes task output from infrastructure failure", () => {
@@ -655,6 +833,12 @@ test("Windows worker circuit breaker distinguishes task output from infrastructu
   assert.equal(windowsWorkerRuntime.isInfrastructureWorkerFailure(new Error("fetch failed: ECONNRESET")), true);
   assert.equal(windowsWorkerRuntime.shouldRetryWorkerTask({ attempt: 1 }), true);
   assert.equal(windowsWorkerRuntime.shouldRetryWorkerTask({ attempt: 3 }), false);
+  const active = windowsWorkerRuntime.resolveThermalCycleState(null, { now: 1_000, activeMs: 7_200_000, cooldownMs: 3_600_000 });
+  assert.deepEqual(active, { phase: "active", until: 7_201_000 });
+  const cooling = windowsWorkerRuntime.resolveThermalCycleState({ phase: "active", until: new Date(500).toISOString() }, { now: 1_000, activeMs: 7_200_000, cooldownMs: 3_600_000 });
+  assert.deepEqual(cooling, { phase: "cooldown", until: 3_601_000 });
+  const resumed = windowsWorkerRuntime.resolveThermalCycleState({ phase: "cooldown", until: new Date(500).toISOString() }, { now: 1_000, activeMs: 7_200_000, cooldownMs: 3_600_000 });
+  assert.deepEqual(resumed, { phase: "active", until: 7_201_000 });
 });
 
 test("ATS detector recognizes Greenhouse, Lever, Ashby, Workday, and SmartRecruiters", () => {

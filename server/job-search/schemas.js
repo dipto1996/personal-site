@@ -102,7 +102,7 @@ export const deepEvaluationSchema = z.object({
     compensation: mustHaveGateSchema,
     codingInterview: mustHaveGateSchema,
   }),
-  claims: z.array(evidenceSchema).max(30).default([]),
+  claims: z.array(groundedEvidenceSchema).max(30).default([]),
   redFlags: z.array(z.string()).max(10).default([]),
   greenFlags: z.array(z.string()).max(10).default([]),
   unknowns: z.array(z.string()).max(10).default([]),

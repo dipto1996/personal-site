@@ -122,7 +122,87 @@ test("annual compensation parser handles decimal salary ranges without treating 
     maximum: 123074,
     text: "$89,502.40-$123,073.60 a year",
     hourly: false,
+    compensationType: "base_or_salary",
   });
+});
+
+test("annual compensation parser does not mistake years of experience for salary", () => {
+  assert.equal(parseAnnualCompensation("Salary commensurate with 10-15 years of relevant experience"), null);
+  assert.deepEqual(
+    parseAnnualCompensation("Base salary range: 170-210k")?.minimum,
+    170000,
+  );
+});
+
+test("total-compensation-only evidence cannot satisfy the annual-base gate", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director of Analytics",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "Lead analytics. Total compensation is $220,000-$260,000 including bonus and equity.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  }, modelEvaluation({ expertiseFit: dimension(4, "Strong analytics leadership match.") }));
+  assert.equal(result.mustHave.compensation.status, "unknown");
+  assert.equal(result.dimensions.compensation.score, null);
+});
+
+test("unrelated search snippets cannot block sponsorship or establish compensation", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director of Product Analytics",
+    company: "Example Analytics",
+    canonicalUrl: "https://example.com/job",
+    description: "Lead product analytics and experimentation.",
+    details: {
+      sourceEvidence: [],
+      claims: [],
+      research: { results: [{
+        title: "Other Company Product Analytics Manager",
+        description: "Other Company does not sponsor visas. Base salary is $90,000-$110,000.",
+        url: "https://example.org/other-company-role",
+      }] },
+    },
+  }, modelEvaluation({ expertiseFit: dimension(4.5, "Strong product analytics match.") }));
+  assert.equal(result.mustHave.workAuthorization.status, "unknown");
+  assert.equal(result.mustHave.compensation.status, "unknown");
+  assert.equal(result.verdict, "maybe");
+});
+
+test("explicit F-1 OPT incompatibility blocks work authorization", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Analytics Manager",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "Lead customer analytics. We cannot accept candidates working on F-1 OPT or STEM OPT.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  }, modelEvaluation({ expertiseFit: dimension(4, "Strong customer analytics match.") }));
+  assert.equal(result.mustHave.workAuthorization.status, "blocked");
+  assert.equal(result.verdict, "pass");
+});
+
+test("title routing alone cannot mark expertise as met", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director of Product Analytics",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  }, modelEvaluation({ expertiseFit: dimension(null, "Responsibilities were not supplied.") }));
+  assert.equal(result.mustHave.expertiseFit.status, "unknown");
+  assert.equal(result.verdict, "maybe");
+});
+
+test("unknown evidence status always produces a null score", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director of Product Analytics",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "Lead product analytics and experimentation.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  }, modelEvaluation({
+    expertiseFit: dimension(4, "Strong match."),
+    interviewVelocity: dimension(0, "No process evidence.", "unknown"),
+  }));
+  assert.equal(result.dimensions.interviewVelocity.score, null);
 });
 
 test("data-engineering management remains reviewable while data-engineering IC is coding-blocked", () => {

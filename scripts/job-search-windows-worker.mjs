@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,7 +11,7 @@ import { z } from "zod";
 import { assertApprovedWindowsModel, assertResourcesSafe } from "./job-search-windows-resource-guard.mjs";
 import { getWorkerPass, getWorkerPasses, REQUIRED_WORKER_VERSION, WORKER_LIMITS, workerResultId } from "../server/job-search/worker-contract.js";
 import { parseStructuredContent } from "../server/job-search/schemas.js";
-import { shouldRetryWorkerTask, workerFailureCategory } from "../server/job-search/windows-worker-runtime.js";
+import { resolveThermalCycleState, shouldRetryWorkerTask, workerFailureCategory } from "../server/job-search/windows-worker-runtime.js";
 
 const args = new Set(process.argv.slice(2));
 const valueArg = (name, fallback) => {
@@ -22,6 +22,8 @@ const valueArg = (name, fallback) => {
 const once = args.has("--once");
 const maxTasks = Math.max(0, Number(valueArg("--max-tasks", once ? "1" : "0")) || 0);
 const pollMs = Math.max(5_000, Number(valueArg("--poll-ms", "15000")) || 15_000);
+const activeMinutes = Math.max(1, Number(valueArg("--active-minutes", process.env.JOBSEARCH_WORKER_ACTIVE_MINUTES || "120")) || 120);
+const cooldownMinutes = Math.max(1, Number(valueArg("--cooldown-minutes", process.env.JOBSEARCH_WORKER_COOLDOWN_MINUTES || "60")) || 60);
 const endpoint = String(process.env.JOBSEARCH_WORKER_BASE_URL || "").replace(/\/$/, "");
 const token = String(process.env.JOBSEARCH_WORKER_TOKEN || "");
 const workerId = String(process.env.JOBSEARCH_WORKER_ID || `${os.hostname().toLowerCase()}:${process.pid}`).replace(/[^a-z0-9_.:-]/gi, "-");
@@ -30,9 +32,11 @@ const modelName = process.env.JOBSEARCH_LOCAL_LLM_MODEL || "Qwen3-4B-Q4_K_M";
 const modelPath = process.env.JOBSEARCH_LOCAL_MODEL_PATH || "";
 const llamaServerPath = process.env.JOBSEARCH_LLAMA_SERVER_PATH || "";
 const modelBaseUrl = String(process.env.JOBSEARCH_LOCAL_LLM_BASE_URL || "http://127.0.0.1:8080/v1").replace(/\/$/, "");
-const gpuLayers = Math.max(0, Math.min(99, Number(process.env.JOBSEARCH_LOCAL_GPU_LAYERS || 24) || 24));
+const gpuLayers = Math.max(0, Math.min(20, Number(process.env.JOBSEARCH_LOCAL_GPU_LAYERS || 20) || 20));
+const cpuThreads = Math.max(1, Math.min(8, Number(process.env.JOBSEARCH_LOCAL_CPU_THREADS || 4) || 4));
 const runtimeDir = process.env.JOBSEARCH_WORKER_RUNTIME_DIR || path.join(process.env.LOCALAPPDATA || os.homedir(), "DiptopalJobWorker");
 const logDir = path.join(runtimeDir, "logs");
+const thermalStatePath = path.join(runtimeDir, "thermal-cycle.json");
 
 if (!endpoint || (!endpoint.startsWith("https://") && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(endpoint))) {
   throw new Error("JOBSEARCH_WORKER_BASE_URL must use HTTPS (loopback HTTP is allowed only for local calibration). ");
@@ -48,6 +52,45 @@ function log(event, details = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const activeMs = activeMinutes * 60_000;
+const cooldownMs = cooldownMinutes * 60_000;
+
+async function readThermalState() {
+  try {
+    const state = JSON.parse(await readFile(thermalStatePath, "utf8"));
+    return resolveThermalCycleState(state, { activeMs, cooldownMs });
+  } catch {
+    // A missing or malformed state safely starts a fresh bounded active window.
+  }
+  return resolveThermalCycleState(null, { activeMs, cooldownMs });
+}
+
+let thermalState = await readThermalState();
+
+async function persistThermalState() {
+  await writeFile(thermalStatePath, JSON.stringify({
+    phase: thermalState.phase,
+    until: new Date(thermalState.until).toISOString(),
+    activeMinutes,
+    cooldownMinutes,
+    updatedAt: new Date().toISOString(),
+  }, null, 2));
+}
+
+async function beginActiveWindow() {
+  thermalState = { phase: "active", until: Date.now() + activeMs };
+  await persistThermalState();
+  log("thermal_active_started", { activeMinutes, activeUntil: new Date(thermalState.until).toISOString() });
+}
+
+async function beginCooldown(reason) {
+  if (thermalState.phase === "cooldown" && thermalState.until > Date.now()) return;
+  thermalState = { phase: "cooldown", until: Date.now() + cooldownMs };
+  await persistThermalState();
+  await stopModel(reason);
+  log("thermal_cooldown_started", { reason, cooldownMinutes, cooldownUntil: new Date(thermalState.until).toISOString() });
 }
 
 async function workerFetch(pathname, { method = "GET", body, timeoutMs = 30_000 } = {}) {
@@ -96,7 +139,7 @@ async function startModel() {
       "--port", String(port),
       "--ctx-size", String(WORKER_LIMITS.contextTokens),
       "--parallel", String(WORKER_LIMITS.concurrency),
-      "--threads", "6",
+      "--threads", String(cpuThreads),
       "--n-gpu-layers", String(gpuLayers),
       "--no-webui",
     ], {
@@ -108,7 +151,7 @@ async function startModel() {
   }
   modelProcess.once("exit", () => { modelProcess = null; });
   lowerProcessPriority(modelProcess.pid);
-  log("model_starting", { pid: modelProcess.pid, gpuLayers, resources: evaluation.summary });
+  log("model_starting", { pid: modelProcess.pid, gpuLayers, cpuThreads, resources: evaluation.summary });
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if (await modelHealth()) {
@@ -142,7 +185,7 @@ function responseFormat(schema, name) {
 async function callLocalPass(pass) {
   let messages = pass.messages.map((message, index) => (
     index === pass.messages.length - 1 && message.role === "user"
-      ? { ...message, content: `/no_think\n${message.content}` }
+      ? { ...message, content: `/${pass.thinking ? "think" : "no_think"}\n${message.content}` }
       : message
   ));
   const usage = { inputTokens: 0, outputTokens: 0, repairAttempts: 0 };
@@ -155,7 +198,7 @@ async function callLocalPass(pass) {
         messages,
         temperature: 0.1,
         max_tokens: pass.maxTokens,
-        reasoning_budget_tokens: 0,
+        reasoning_budget_tokens: pass.thinking ? (pass.name === "critic" ? 512 : 768) : 0,
         cache_prompt: true,
         response_format: responseFormat(pass.schema, `windows_${pass.name}`),
       }),
@@ -181,7 +224,7 @@ async function callLocalPass(pass) {
         ...messages,
         {
           role: "user",
-          content: `/no_think\nYour previous JSON failed validation: ${issues}. Return the complete corrected JSON object. Explicit and inferred claims require a non-empty sourceUrl and an exact non-empty supportingPassage from the supplied evidence. Move unsupported facts to unknowns instead of guessing.`,
+          content: `/${pass.thinking ? "think" : "no_think"}\nYour previous JSON failed validation: ${issues}. Return the complete corrected JSON object. Explicit and inferred claims require a non-empty sourceUrl and an exact non-empty supportingPassage from the supplied evidence. Move unsupported facts to unknowns instead of guessing.`,
         },
       ];
     }
@@ -274,10 +317,53 @@ async function resourcesReadyBeforeClaim() {
   }
 }
 
+async function thermalWindowReady() {
+  if (once) return true;
+  const now = Date.now();
+  if (thermalState.phase === "active" && now < thermalState.until) return true;
+  if (thermalState.phase === "active") await beginCooldown("scheduled_two_hour_limit");
+  if (thermalState.phase === "cooldown" && Date.now() >= thermalState.until) {
+    await beginActiveWindow();
+    return true;
+  }
+  await stopModel("thermal_cooldown");
+  const remainingSeconds = Math.max(1, Math.ceil((thermalState.until - Date.now()) / 1000));
+  await workerFetch("heartbeat", {
+    method: "POST",
+    body: {
+      workerId,
+      version,
+      status: "cooling_down",
+      metadata: {
+        model: modelName,
+        processed,
+        completed,
+        failed,
+        cooldownUntil: new Date(thermalState.until).toISOString(),
+      },
+    },
+  }).catch(() => null);
+  await sleep(Math.min(60_000, remainingSeconds * 1000));
+  return false;
+}
+
 await waitForWorkerApi();
-log("worker_started", { workerId, endpoint, model: modelName, context: WORKER_LIMITS.contextTokens, concurrency: WORKER_LIMITS.concurrency });
+await persistThermalState();
+log("worker_started", {
+  workerId,
+  endpoint,
+  model: modelName,
+  context: WORKER_LIMITS.contextTokens,
+  concurrency: WORKER_LIMITS.concurrency,
+  cpuThreads,
+  activeMinutes,
+  cooldownMinutes,
+  thermalPhase: thermalState.phase,
+  thermalUntil: new Date(thermalState.until).toISOString(),
+});
 
 while (!stopping && (!maxTasks || processed < maxTasks)) {
+  if (!await thermalWindowReady()) continue;
   if (!await resourcesReadyBeforeClaim()) continue;
   let claim;
   try {
@@ -325,7 +411,8 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
     const retry = shouldRetryWorkerTask(task);
     if (failureCategory === "resource_pressure") {
       await stopModel("resource_pressure");
-      await sleep(15_000);
+      if (/temperature/i.test(String(error.message || error))) await beginCooldown("temperature_guard");
+      else await sleep(15_000);
     }
     await workerFetch("failure", {
       method: "POST",

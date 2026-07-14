@@ -1,7 +1,7 @@
 import { TARGET_PROFILE } from "./profile.js";
 import { classifyCandidateTitle } from "./title-ontology.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v3";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v4";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 
@@ -29,6 +29,7 @@ const LEGACY_DIMENSIONS = Object.freeze({
 
 const BLOCKED_SPONSORSHIP = /\b(?:not able to consider|unable to consider|will not consider|cannot consider|do not consider|does not consider|no|not eligible for|unable to (?:offer|provide)|cannot (?:offer|provide)|does not (?:offer|provide)|will not (?:offer|provide))[^.]{0,100}(?:visa\s+)?sponsor(?:ship|ing)?\b|\bwithout (?:current or future |now or in the future )?(?:visa )?sponsorship\b/i;
 const CITIZENSHIP_BLOCK = /\b(?:u\.?s\.? citizen(?:ship)? required|must be (?:a )?u\.?s\.? citizen|security clearance required|active security clearance)\b/i;
+const OPT_BLOCK = /\b(?:cannot|can't|unable to|do not|does not|will not|not able to)\s+(?:accept|hire|employ|consider|support)[^.]{0,100}\b(?:F-?1|OPT|STEM OPT|CPT)\b|\b(?:F-?1|OPT|STEM OPT|CPT)\b[^.]{0,100}\b(?:not accepted|not eligible|ineligible|not supported)\b/i;
 const SPONSORSHIP_AVAILABLE = /\b(?:visa sponsorship (?:is )?available|sponsorship available|will (?:provide|offer) (?:visa )?sponsorship|we sponsor|eligible for sponsorship|F-1 OPT|STEM OPT|CPT)\b/i;
 const EVERIFY_HISTORY = /\bE-Verify\b/i;
 const SPONSORSHIP_HISTORY = /\b(?:H-1B employer data|H-1B petitions?|certified LCA|LCA disclosure)\b/i;
@@ -55,11 +56,12 @@ function normalizeDimension(value, fallbackReason = "Evidence not established.")
   const numeric = value?.score === null || value?.score === undefined || value?.score === ""
     ? null
     : Number(value.score);
+  const evidenceStatus = ["explicit", "inferred", "unknown"].includes(value?.evidenceStatus)
+    ? value.evidenceStatus
+    : "unknown";
   return {
-    score: Number.isFinite(numeric) ? Math.round(clamp(numeric, 0, 5) * 10) / 10 : null,
-    evidenceStatus: ["explicit", "inferred", "unknown"].includes(value?.evidenceStatus)
-      ? value.evidenceStatus
-      : "unknown",
+    score: evidenceStatus === "unknown" ? null : Number.isFinite(numeric) ? Math.round(clamp(numeric, 0, 5) * 10) / 10 : null,
+    evidenceStatus,
     confidence: Number.isFinite(Number(value?.confidence)) ? clamp(Number(value.confidence), 0, 1) : 0,
     reasoning: clean(value?.reasoning) || fallbackReason,
   };
@@ -86,21 +88,34 @@ export function parseAnnualCompensation(value) {
   const range = text.match(/(?:USD\s*)?\$?\s*(\d{2,3}(?:,\d{3})*(?:\.\d+)?)\s*([kK]?)\s*(?:-|–|—|to)\s*(?:USD\s*)?\$?\s*(\d{2,3}(?:,\d{3})*(?:\.\d+)?)\s*([kK]?)/i);
   const single = !range && text.match(/(?:USD\s*|\$\s*)(\d{2,3}(?:,\d{3})*(?:\.\d+)?)\s*([kK]?)/i);
   if (!range && !single) return null;
+  const rawMinimum = Number.parseFloat(String(range?.[1] || single?.[1] || "").replaceAll(",", ""));
+  const currencyOrThousandsMarked = /(?:USD|\$)/i.test(range?.[0] || single?.[0] || "")
+    || Boolean(range?.[2] || range?.[4] || single?.[2]);
+  const hourly = /(?:per|\/|a)\s*(?:hour|hr)\b/i.test(text);
+  if (!currencyOrThousandsMarked && !hourly && rawMinimum < 40) return null;
   let minimum = numericSalary(range?.[1] || single?.[1], range?.[2] || single?.[2]);
   let maximum = numericSalary(range?.[3] || range?.[1] || single?.[1], range?.[4] || range?.[2] || single?.[2]);
   if (!minimum || !maximum) return null;
-  const hourly = /(?:per|\/|a)\s*(?:hour|hr)\b/i.test(text);
   if (hourly) {
     minimum = Math.round(minimum * 2080);
     maximum = Math.round(maximum * 2080);
   }
-  return { minimum: Math.min(minimum, maximum), maximum: Math.max(minimum, maximum), text, hourly };
+  const totalCompensationOnly = /\b(?:total (?:annual )?compensation|total rewards?|on-target earnings|OTE)\b/i.test(text)
+    && !/\b(?:base|base salary|salary range|pay range|base pay)\b/i.test(text);
+  return {
+    minimum: Math.min(minimum, maximum),
+    maximum: Math.max(minimum, maximum),
+    text,
+    hourly,
+    compensationType: totalCompensationOnly ? "total" : "base_or_salary",
+  };
 }
 
 function relevantClaims(job, pattern) {
   return [...(job?.details?.sourceEvidence || []), ...(job?.details?.claims || [])]
     .filter((claim) => pattern.test(clean(claim?.claimType)))
     .map((claim) => ({
+      claimType: clean(claim?.claimType),
       text: clean(`${claim.value || ""} ${claim.supportingPassage || ""}`),
       sourceUrl: claim.sourceUrl || job?.canonicalUrl || "",
       evidenceType: claim.evidenceType || "inferred",
@@ -166,10 +181,14 @@ function compensationEvidence(job) {
   const description = clean(job?.description);
   const salarySentence = description.match(/[^.!?]{0,100}\b(?:salary|compensation|base pay|pay range)\b[^.!?]{0,220}/i)?.[0];
   if (salarySentence) candidates.push({ text: salarySentence, sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" });
-  candidates.push(...researchEvidence(job).filter((item) => /salary|compensation|pay range|\$\s*\d/i.test(item.text)));
+  candidates.push(...researchEvidence(job).filter((item) => (
+    evidenceNamesCompany(item, job?.company)
+      && evidenceNamesRole(item, job?.title)
+      && /base salary|salary range|base pay|pay range|\$\s*\d/i.test(item.text)
+  )));
   for (const candidate of candidates) {
     const parsed = parseAnnualCompensation(candidate.text);
-    if (parsed) return { ...parsed, ...candidate };
+    if (parsed && parsed.compensationType !== "total") return { ...parsed, ...candidate };
   }
   return null;
 }
@@ -178,8 +197,15 @@ function authorizationEvidence(job) {
   const posting = { text: clean(job?.description), sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" };
   const claims = relevantClaims(job, /(visa|sponsor|work_authorization|immigration|citizenship|clearance|h1b|opt|everify)/i);
   const research = [...employerEvidence(job), ...researchEvidence(job)];
-  const candidates = [posting, ...claims, ...research];
-  const blocked = candidates.find((item) => BLOCKED_SPONSORSHIP.test(item.text) || CITIZENSHIP_BLOCK.test(item.text));
+  const jobClaims = claims.filter((item) => !officialEligibilitySource(item.sourceUrl)
+    && !/employer|history|e-?verify|lca/i.test(item.claimType || ""));
+  const roleSpecificResearch = research.filter((item) => !officialEligibilitySource(item.sourceUrl)
+    && evidenceNamesCompany(item, job?.company)
+    && evidenceNamesRole(item, job?.title));
+  const jobLevelEvidence = [posting, ...jobClaims, ...roleSpecificResearch];
+  const blocked = jobLevelEvidence.find((item) => (
+    BLOCKED_SPONSORSHIP.test(item.text) || CITIZENSHIP_BLOCK.test(item.text) || OPT_BLOCK.test(item.text)
+  ));
   if (blocked) return {
     status: "blocked",
     evidenceStatus: blocked.evidenceType,
@@ -188,7 +214,7 @@ function authorizationEvidence(job) {
       : "The posting explicitly excludes candidates requiring current or future visa sponsorship.",
     sourceUrl: blocked.sourceUrl,
   };
-  const available = candidates.find((item) => SPONSORSHIP_AVAILABLE.test(item.text));
+  const available = jobLevelEvidence.find((item) => SPONSORSHIP_AVAILABLE.test(item.text));
   if (available) return {
     status: "met",
     evidenceStatus: available.evidenceType,
@@ -332,19 +358,20 @@ function compensationGate(job) {
 function expertiseGate(job, dimensions, modelGate) {
   const score = dimensions.expertiseFit.score;
   const ontology = classifyCandidateTitle(job?.title || "");
+  const sourceUrl = job?.canonicalUrl || "";
   if (ontology.excludedConcepts?.length && !ontology.eligible) {
-    return normalizeGate({ status: "blocked", evidenceStatus: "explicit", reason: "The primary function is an excluded engineering implementation track." });
+    return normalizeGate({ status: "blocked", evidenceStatus: "explicit", reason: "The primary function is an excluded engineering implementation track.", sourceUrl });
   }
   if (score !== null && score < 2.5) {
-    return normalizeGate({ status: "blocked", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning });
+    return normalizeGate({ status: "blocked", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning, sourceUrl });
   }
   if (score !== null && score >= 2.5) {
-    return normalizeGate({ status: "met", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning });
+    return normalizeGate({ status: "met", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning, sourceUrl });
   }
   if (ontology.eligible) {
-    return normalizeGate({ status: "met", evidenceStatus: "inferred", reason: "The title matches the required function-and-seniority routing rules; responsibility-level fit still needs confirmation." });
+    return normalizeGate({ status: "unknown", evidenceStatus: "inferred", reason: "The title passed candidate routing, but responsibility-level expertise fit was not established by the evaluation.", sourceUrl });
   }
-  return normalizeGate(modelGate, "Primary-function fit is not yet established.");
+  return normalizeGate({ ...modelGate, sourceUrl: modelGate?.sourceUrl || sourceUrl }, "Primary-function fit is not yet established.");
 }
 
 function applyGateScores(dimensions, gates, compensation) {

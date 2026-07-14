@@ -25,6 +25,7 @@ import { getAnalyticsSummary, recordAnalyticsEvent, recordAnalyticsEvents } from
 import { getAppUrl, getRuntimeStatus } from "./config.js";
 import {
   getJobSearchDashboard,
+  getJobSearchEvaluationAudit,
   holdJobSearchLocalQueue,
   getJobSearchPlan,
   releaseJobSearchLocalBacklog,
@@ -560,6 +561,17 @@ async function handleApi(request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/job-search/usage") {
     requireJobSearchAccess(sessionContext);
     sendJson(response, 200, { usage: await getJobSearchUsage() });
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/job-search/audit") {
+    requireJobSearchAccess(sessionContext);
+    sendJson(response, 200, {
+      audit: await getJobSearchEvaluationAudit({
+        sampleSize: url.searchParams.get("sampleSize") || 20,
+        seed: url.searchParams.get("seed") || undefined,
+      }),
+    });
     return true;
   }
 

@@ -1,6 +1,6 @@
 # Windows Job Intelligence Worker Report
 
-Updated: 2026-07-13
+Updated: 2026-07-14
 
 ## Repository
 
@@ -62,8 +62,8 @@ and 0-100 scores must be coherent. One bounded correction pass is allowed for in
 citations, or score/verdict contradictions; unresolved output fails the lease and is not persisted.
 
 `llama-server` is spawned only after a task is claimed and both memory guards pass. It binds to
-`127.0.0.1`, uses context 8192, concurrency 1, six CPU threads, 24 Vulkan GPU layers, and below-normal process
-priority. Only the worker-owned model process is stopped, either after five idle minutes or at worker exit.
+`127.0.0.1`, uses context 8192, concurrency 1, four CPU threads, at most 20 Vulkan GPU layers, and below-normal process
+priority. Only the worker-owned model process is stopped, after five idle minutes, at worker exit, or during the mandatory cooldown.
 No firewall rule, tunnel, VPN, or public listener is created.
 
 The PowerShell setup stores the production token as a current-user DPAPI-protected credential and registers
@@ -71,8 +71,10 @@ a non-elevated scheduled task only when `-RegisterScheduledTask` is explicitly p
 collector scripts share the same token boundary and persistent Chromium profile. The production worker is
 registered under Task Scheduler and the model remains loopback-only.
 
-The GPU-layer limit was reduced from full offload to 24 after live monitoring observed one recoverable GPU
-device-loss event. This trades some latency for display/driver headroom on the 6 GiB GTX 1660 Ti.
+The GPU-layer limit is reduced from full offload to 20 after live monitoring observed one recoverable GPU
+device-loss event. The worker processes for 120 minutes, cools with the model stopped for 60 minutes, refuses
+startup at 72 C or above, and enters cooldown if runtime GPU temperature reaches 80 C. This trades latency for
+display, driver, and thermal headroom on the 6 GiB GTX 1660 Ti.
 
 ## Preliminary local calibration
 

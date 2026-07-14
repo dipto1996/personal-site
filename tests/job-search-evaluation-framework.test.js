@@ -126,6 +126,37 @@ test("annual compensation parser handles decimal salary ranges without treating 
   });
 });
 
+test("hourly compensation is annualized once without treating hourly rates as thousands", () => {
+  assert.deepEqual(parseAnnualCompensation("$20-$30 per hour"), {
+    minimum: 41600,
+    maximum: 62400,
+    text: "$20-$30 per hour",
+    hourly: true,
+    compensationType: "base_or_salary",
+  });
+  assert.deepEqual(parseAnnualCompensation("$75/hour"), {
+    minimum: 156000,
+    maximum: 156000,
+    text: "$75/hour",
+    hourly: true,
+    compensationType: "base_or_salary",
+  });
+});
+
+test("hourly compensation below the annual minimum is a blocker", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Manager of Data Science and Analytics",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "Lead data science and analytics. The position pays $20-$30 per hour.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  }, modelEvaluation({ expertiseFit: dimension(4, "Strong data-science management match.") }));
+
+  assert.equal(result.mustHave.compensation.status, "blocked");
+  assert.match(result.mustHave.compensation.reasoning, /\$62,400/);
+  assert.equal(result.verdict, "pass");
+});
+
 test("annual compensation parser does not mistake years of experience for salary", () => {
   assert.equal(parseAnnualCompensation("Salary commensurate with 10-15 years of relevant experience"), null);
   assert.deepEqual(

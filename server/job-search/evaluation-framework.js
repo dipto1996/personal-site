@@ -1,7 +1,7 @@
 import { TARGET_PROFILE } from "./profile.js";
 import { classifyCandidateTitle } from "./title-ontology.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v6";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v7";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 
@@ -75,9 +75,10 @@ function normalizeDimensions(input = {}) {
   return Object.fromEntries(Object.keys(EVALUATION_WEIGHTS).map((key) => [key, normalizeDimension(mapped[key])]));
 }
 
-function numericSalary(value, suffix = "") {
+function numericSalary(value, suffix = "", { hourly = false } = {}) {
   const parsed = Number.parseFloat(String(value || "").replaceAll(",", ""));
   if (!Number.isFinite(parsed)) return null;
+  if (hourly) return parsed;
   if (/k/i.test(suffix) || parsed > 0 && parsed < 1000) return Math.round(parsed * 1000);
   return Math.round(parsed);
 }
@@ -91,10 +92,10 @@ export function parseAnnualCompensation(value) {
   const rawMinimum = Number.parseFloat(String(range?.[1] || single?.[1] || "").replaceAll(",", ""));
   const currencyOrThousandsMarked = /(?:USD|\$)/i.test(range?.[0] || single?.[0] || "")
     || Boolean(range?.[2] || range?.[4] || single?.[2]);
-  const hourly = /(?:per|\/|a)\s*(?:hour|hr)\b/i.test(text);
+  const hourly = /(?:per|\/|a)\s*(?:hour|hr)\b|\bhourly\b/i.test(text);
   if (!currencyOrThousandsMarked && !hourly && rawMinimum < 40) return null;
-  let minimum = numericSalary(range?.[1] || single?.[1], range?.[2] || single?.[2]);
-  let maximum = numericSalary(range?.[3] || range?.[1] || single?.[1], range?.[4] || range?.[2] || single?.[2]);
+  let minimum = numericSalary(range?.[1] || single?.[1], range?.[2] || single?.[2], { hourly });
+  let maximum = numericSalary(range?.[3] || range?.[1] || single?.[1], range?.[4] || range?.[2] || single?.[2], { hourly });
   if (!minimum || !maximum) return null;
   if (hourly) {
     minimum = Math.round(minimum * 2080);
@@ -179,7 +180,7 @@ function compensationEvidence(job) {
     ...relevantClaims(job, /(compensation|salary|base_pay|pay_range)/i),
   ];
   const description = clean(job?.description);
-  const salarySentence = description.match(/[^.!?]{0,100}\b(?:salary|compensation|base pay|pay range)\b[^.!?]{0,220}/i)?.[0];
+  const salarySentence = description.match(/[^.!?]{0,100}\b(?:salary|compensation|base pay|pay range|pays?|hourly rate|wage)\b[^.!?]{0,220}/i)?.[0];
   if (salarySentence) candidates.push({ text: salarySentence, sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" });
   candidates.push(...researchEvidence(job).filter((item) => (
     evidenceNamesCompany(item, job?.company)

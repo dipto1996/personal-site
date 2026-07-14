@@ -212,9 +212,9 @@ function nextLocalTaskType(job) {
 
 function localTaskPriority(job, taskType) {
   if (taskType === "triage") return 100;
-  if (taskType === "deep") return job?.details?.triage?.relevance === "relevant" ? 80
-    : job?.details?.triage?.relevance === "uncertain" ? 70 : 60;
-  if (taskType === "critic") return 75;
+  if (taskType === "deep") return job?.details?.triage?.relevance === "relevant" ? 110
+    : job?.details?.triage?.relevance === "uncertain" ? 105 : 101;
+  if (taskType === "critic") return 120;
   if (taskType === "outreach") return 30;
   return 0;
 }

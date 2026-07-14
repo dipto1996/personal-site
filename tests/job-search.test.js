@@ -505,6 +505,7 @@ test("every current deep evaluation, including a hard-blocked pass, receives an 
   });
   const task = await workflow.enqueueNextWindowsTask(job);
   assert.equal(task.taskType, "critic");
+  assert.ok(task.priority > 110);
 });
 
 test("a prompt-version change re-triages every prior relevance class", async () => {
@@ -588,6 +589,7 @@ test("queue hold and controlled release preserve history and only activate the r
       });
       const task = await workflow.enqueueNextWindowsTask(job);
       assert.equal(task.status, "queued");
+      assert.ok(task.priority > 100);
     }
     for (let index = 0; index < 5; index += 1) {
       const job = await seedJob({

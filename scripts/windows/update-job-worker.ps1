@@ -49,8 +49,15 @@ $updatedSetupScript = Join-Path $repositoryRoot 'scripts\windows\setup-job-worke
 if ($LASTEXITCODE -ne 0) { throw 'Unable to update the Windows worker configuration.' }
 
 if (-not $SkipStart) {
-  & (Join-Path $repositoryRoot 'scripts\windows\start-job-worker.ps1')
-  if ($LASTEXITCODE -ne 0) { throw 'The updated Windows worker did not start.' }
+  $scheduledTask = Get-ScheduledTask -TaskName $script:WorkerTaskName -ErrorAction SilentlyContinue
+  if (-not $scheduledTask) { throw 'The Windows worker scheduled task was not registered.' }
+  Start-ScheduledTask -TaskName $script:WorkerTaskName
+  $deadline = (Get-Date).AddSeconds(30)
+  do {
+    Start-Sleep -Milliseconds 500
+    $workerProcess = Get-WorkerProcess
+  } while (-not $workerProcess -and (Get-Date) -lt $deadline)
+  if (-not $workerProcess) { throw 'The supervised Windows worker did not start within 30 seconds.' }
 }
 
 [pscustomobject]@{

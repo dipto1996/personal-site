@@ -53,11 +53,11 @@ export function evaluateResourceGuard(inventory, { phase = "task" } = {}) {
     reasons.push(`At least ${minimumAvailable / GIB} GiB available RAM is required for ${phase}.`);
   }
   if ((inventory.disk?.freeBytes || 0) < 10 * GIB) reasons.push("At least 10 GiB free disk space is required.");
-  if ((inventory.cpu?.loadPercent || 0) > 90) reasons.push("CPU load is above 90 percent.");
+  if ((inventory.cpu?.loadPercent || 0) > 85) reasons.push("CPU load is above 85 percent.");
   if (phase === "startup" && inventory.nvidia && inventory.nvidia.freeVramMiB < 4000) {
     reasons.push("At least 4000 MiB free NVIDIA VRAM is required before model startup.");
   }
-  const maximumGpuTemperature = phase === "startup" ? 72 : 80;
+  const maximumGpuTemperature = phase === "startup" ? 68 : 78;
   if (inventory.nvidia?.temperatureCelsius >= maximumGpuTemperature) {
     reasons.push(`GPU temperature is ${inventory.nvidia.temperatureCelsius} C; maximum for ${phase} is ${maximumGpuTemperature} C.`);
   }
@@ -73,6 +73,7 @@ export function evaluateResourceGuard(inventory, { phase = "task" } = {}) {
       totalVramMiB: inventory.nvidia?.totalVramMiB || 0,
       freeVramMiB: inventory.nvidia?.freeVramMiB || 0,
       gpuTemperatureCelsius: inventory.nvidia?.temperatureCelsius ?? null,
+      maximumGpuTemperatureCelsius: maximumGpuTemperature,
       cpuLoadPercent: inventory.cpu?.loadPercent || 0,
     },
   };

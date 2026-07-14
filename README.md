@@ -108,9 +108,11 @@ exposes bearer-token-protected claim, heartbeat, result, failure, queue, and hea
 `/api/job-search/worker/*`. The Windows computer receives a bounded evidence packet for one leased task;
 it never receives `DATABASE_URL` or provider credentials.
 
-The measured Windows host is approved only for `Qwen3-4B-Q4_K_M`, context 4096, concurrency 1. The
+The measured Windows host is approved only for `Qwen3-4B-Q4_K_M`, context 8192, concurrency 1. The
 resource guard rejects Qwen3-8B and Qwen3-14B on this host. `llama-server` binds to `127.0.0.1`, runs at
-below-normal priority, starts only after a claimed task, and stops after five idle minutes or worker exit.
+below-normal priority, starts only after a claimed task, and stops after five idle minutes, worker exit, or
+the 78 C runtime temperature limit. Startup is blocked at 68 C. The 120-minute active/60-minute cooldown
+schedule is a maximum; temperature safety may begin cooldown earlier.
 
 Useful Windows commands:
 

@@ -791,6 +791,8 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(workerScript, /scheduled_two_hour_limit/);
   assert.match(workerScript, /pass\.thinking \? "think" : "no_think"/);
   assert.match(workerScript, /resource_wait_before_claim/);
+  assert.match(workerScript, /beginCooldown\("temperature_guard"\)/);
+  assert.match(workerScript, /AbortSignal\.any/);
   assert.ok(workerScript.indexOf("resourcesReadyBeforeClaim()") < workerScript.indexOf('workerFetch("claim"'));
 });
 
@@ -800,6 +802,8 @@ test("Windows updater preserves the protected credential and fast-forwards witho
   assert.match(script, /status --porcelain/);
   assert.match(script, /merge --ff-only/);
   assert.match(script, /-RegisterScheduledTask/);
+  assert.match(script, /Start-ScheduledTask/);
+  assert.match(script, /supervised Windows worker/);
   assert.match(script, /credentialReused = \$true/);
   assert.doesNotMatch(script, /install-job-worker\.ps1/);
   assert.doesNotMatch(script, /ReplaceCredential/);
@@ -824,6 +828,14 @@ test("Windows resource guard permits this model tier and always rejects Qwen3-14
     nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 2300, temperatureCelsius: 75 },
   }, { phase: "runtime" });
   assert.equal(runtime.ok, true);
+  const runtimeTooHot = resourceGuard.evaluateResourceGuard({
+    memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 8 * (1024 ** 3) },
+    disk: { freeBytes: 100 * (1024 ** 3) },
+    cpu: { loadPercent: 25 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500, temperatureCelsius: 78 },
+  }, { phase: "runtime" });
+  assert.equal(runtimeTooHot.ok, false);
+  assert.equal(runtimeTooHot.summary.maximumGpuTemperatureCelsius, 78);
   const hot = resourceGuard.evaluateResourceGuard({
     memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 8 * (1024 ** 3) },
     disk: { freeBytes: 100 * (1024 ** 3) },

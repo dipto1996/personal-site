@@ -17,6 +17,13 @@ function statusLabel(value) {
     deep_review_pending: "Waiting for Windows deep review",
     critic_pending: "Waiting for critic review",
     queued_local: "Queued for Windows",
+    resource_waiting: "paused for safe resources",
+    cooling_down: "cooling down",
+    starting: "starting",
+    claiming: "checking queue",
+    processing: "processing",
+    idle: "ready",
+    blocked: "blocked",
   };
   if (labels[value]) return labels[value];
   return String(value || "unknown").replaceAll("_", " ");
@@ -32,6 +39,20 @@ function workerIsConnected(worker) {
 function workerStatusLabel(worker) {
   if (!worker) return "not connected";
   return workerIsConnected(worker) ? statusLabel(worker.status) : "offline";
+}
+
+function workerStatusDetail(worker) {
+  if (!workerIsConnected(worker)) return "The Windows worker is not currently connected.";
+  const metadata = worker?.metadata || {};
+  const temperature = Number(metadata.gpuTemperatureCelsius);
+  if (worker.status === "cooling_down") {
+    return `Processing is safely paused${Number.isFinite(temperature) ? ` at ${temperature} C` : ""}${metadata.cooldownUntil ? ` until ${formatDate(metadata.cooldownUntil)}` : ""}. It resumes automatically.`;
+  }
+  if (worker.status === "resource_waiting") {
+    return `Processing is waiting for safe laptop resources${Number.isFinite(temperature) ? `; GPU temperature is ${temperature} C` : ""}. It retries automatically.`;
+  }
+  if (worker.status === "blocked") return metadata.reason || "The worker needs attention before processing can continue.";
+  return "";
 }
 
 function safeExternalUrl(value) {
@@ -149,11 +170,13 @@ function renderLocalProcessing(local = {}, audit = null, loadingAction = "") {
   const worker = workers[0] || null;
   const queueControl = local.queueControl || {};
   const connected = workerIsConnected(worker);
+  const workerDetail = workerStatusDetail(worker);
   return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Local inference</p><h2>Windows worker</h2></div><span>${escapeHtml(workerStatusLabel(worker))}</span></div>
     <div class="job-runtime-grid">
       ${tasks.length ? tasks.map((task) => `<article class="job-runtime-card"><span>${escapeHtml(statusLabel(task.taskType))} &middot; ${escapeHtml(statusLabel(task.status))}</span><strong>${Number(task.count || 0)}</strong></article>`).join("") : `<article class="job-runtime-card"><span>Queue</span><strong>Empty</strong></article>`}
       ${worker ? `<article class="job-runtime-card"><span>Last seen</span><strong>${escapeHtml(formatDate(worker.lastSeenAt))}</strong></article>` : ""}<article class="job-runtime-card"><span>Queue hold</span><strong>${queueControl.holdNewTasks ? "Enabled" : "Disabled"}</strong></article>
     </div>
+    ${workerDetail ? `<p class="job-muted">${escapeHtml(workerDetail)}</p>` : ""}
     <div class="job-actions">
       <button type="button" class="button button-primary" data-queue-release ${!queueControl.holdNewTasks || !connected || loadingAction ? "disabled" : ""}>${loadingAction === "release" ? "Releasing..." : "Release calibration 20"}</button>
       <button type="button" class="button button-secondary" data-queue-retry ${!connected || loadingAction ? "disabled" : ""}>${loadingAction === "retry" ? "Retrying..." : "Retry failed"}</button>

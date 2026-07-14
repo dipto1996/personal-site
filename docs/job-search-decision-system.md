@@ -321,7 +321,7 @@ Routes are tried in this exact order; a failure or exhausted free quota advances
 
 The Windows worker performs deep evaluation in two separate calls: evidence extraction (maximum 1,800 output tokens) and evaluation (maximum 2,400). Triage is capped at 900, critic at 900, and outreach at 500. Every selected candidate, including a triage clear mismatch, receives a deep evaluation and then an independent critic. The worker runs one job at a time with an 8,192-token context, a 12,000-character job-description cap, four CPU threads, and at most 20 GPU layers.
 
-The worker uses a persisted thermal schedule: 120 active minutes followed by 60 cooldown minutes. It finishes an in-flight task, stops `llama-server`, reports `cooling_down`, and does not claim another task until cooldown ends. It also stops early at 80 C GPU temperature, refuses model startup at 72 C or above, and starts the scheduled task only under Windows' default AC-power policy.
+The worker uses a persisted thermal schedule: at most 120 active minutes followed by 60 cooldown minutes. Temperature safety can begin that cooldown earlier. The worker checks resources before every claim, between reasoning passes, and every 15 seconds during a long model call. At 78 C it cancels the active pass, unloads `llama-server`, reports `cooling_down`, and retries the leased task after cooldown; it refuses model startup at 68 C or above. The persistent worker is launched through its registered Windows scheduled task so the PowerShell supervisor remains attached, under Windows' default AC-power policy.
 
 ## Evaluation Audit
 

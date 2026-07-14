@@ -190,20 +190,45 @@ async function callLocalPass(pass) {
   ));
   const usage = { inputTokens: 0, outputTokens: 0, repairAttempts: 0 };
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await fetch(`${modelBaseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: modelName,
-        messages,
-        temperature: 0.1,
-        max_tokens: pass.maxTokens,
-        reasoning_budget_tokens: pass.thinking ? (pass.name === "critic" ? 512 : 768) : 0,
-        cache_prompt: true,
-        response_format: responseFormat(pass.schema, `windows_${pass.name}`),
-      }),
-      signal: AbortSignal.timeout(600_000),
-    });
+    const controller = new AbortController();
+    let pressureError = null;
+    let monitorInFlight = false;
+    const monitor = setInterval(async () => {
+      if (monitorInFlight || pressureError) return;
+      monitorInFlight = true;
+      try {
+        await assertResourcesSafe({ phase: "runtime" });
+      } catch (error) {
+        if (workerFailureCategory(error) === "resource_pressure") {
+          pressureError = error;
+          controller.abort();
+        }
+      } finally {
+        monitorInFlight = false;
+      }
+    }, 15_000);
+    monitor.unref();
+    let response;
+    try {
+      response = await fetch(`${modelBaseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: modelName,
+          messages,
+          temperature: 0.1,
+          max_tokens: pass.maxTokens,
+          reasoning_budget_tokens: pass.thinking ? (pass.name === "critic" ? 512 : 768) : 0,
+          cache_prompt: true,
+          response_format: responseFormat(pass.schema, `windows_${pass.name}`),
+        }),
+        signal: AbortSignal.any([AbortSignal.timeout(600_000), controller.signal]),
+      });
+    } catch (error) {
+      throw pressureError || error;
+    } finally {
+      clearInterval(monitor);
+    }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`Local model returned ${response.status}: ${payload.error?.message || "request failed"}`);
     const choice = payload.choices?.[0];
@@ -236,6 +261,7 @@ async function evaluateTask(task, packet) {
   const output = {};
   const usage = { inputTokens: 0, outputTokens: 0, passes: [] };
   for (const passName of getWorkerPasses(task.taskType)) {
+    await assertResourcesSafe({ phase: "runtime" });
     const pass = getWorkerPass(task.taskType, passName, packet, output);
     const response = await callLocalPass(pass);
     output[pass.name] = response.result;
@@ -306,13 +332,33 @@ async function resourcesReadyBeforeClaim() {
   } catch (error) {
     const category = workerFailureCategory(error);
     if (category !== "resource_pressure") throw error;
+    const temperaturePressure = /temperature/i.test(String(error.message || error));
     if (modelRunning || modelProcess) await stopModel("resource_wait_before_claim");
-    log("resource_wait_before_claim", { error: String(error.message || error).slice(0, 500), retryInSeconds: 30 });
+    if (temperaturePressure) await beginCooldown("temperature_guard");
+    const retryInSeconds = temperaturePressure
+      ? Math.max(1, Math.ceil((thermalState.until - Date.now()) / 1000))
+      : 30;
+    const gpuTemperatureCelsius = error.evaluation?.summary?.gpuTemperatureCelsius ?? null;
+    const maximumGpuTemperatureCelsius = error.evaluation?.summary?.maximumGpuTemperatureCelsius ?? null;
+    log("resource_wait_before_claim", { error: String(error.message || error).slice(0, 500), retryInSeconds });
     await workerFetch("heartbeat", {
       method: "POST",
-      body: { workerId, version, status: "resource_waiting", metadata: { processed, completed, failed } },
+      body: {
+        workerId,
+        version,
+        status: temperaturePressure ? "cooling_down" : "resource_waiting",
+        metadata: {
+          processed,
+          completed,
+          failed,
+          reason: String(error.message || error).slice(0, 300),
+          gpuTemperatureCelsius,
+          maximumGpuTemperatureCelsius,
+          ...(temperaturePressure ? { cooldownUntil: new Date(thermalState.until).toISOString() } : {}),
+        },
+      },
     }).catch(() => null);
-    await sleep(30_000);
+    if (!temperaturePressure) await sleep(30_000);
     return false;
   }
 }
@@ -391,7 +437,7 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
   processed += 1;
   const stopHeartbeat = startHeartbeat(task, () => ({ processed, completed, failed }));
   try {
-    await assertResourcesSafe({ phase: await modelHealth() ? "runtime" : "task" });
+    await assertResourcesSafe({ phase: await modelHealth() ? "runtime" : "startup" });
     await startModel();
     const evaluation = await evaluateTask(task, claim.packet);
     const resultId = workerResultId(task.taskKey, evaluation.output);

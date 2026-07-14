@@ -65,7 +65,9 @@ Runtime guardrails:
 - Periodic heartbeat during generation
 - Automatic idle shutdown
 - Two active hours followed by one model-off cooldown hour
-- Refuse startup at 72 C GPU temperature and enter cooldown at 80 C during processing
+- Refuse startup at 68 C GPU temperature and enter cooldown at 78 C during processing
+- Check temperature during long model passes, cancel safely at the limit, and retry the leased task after cooldown
+- Run the persistent worker through Windows Task Scheduler so the PowerShell supervisor remains attached
 
 ## Reasoning Pipeline
 

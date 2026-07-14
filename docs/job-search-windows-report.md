@@ -73,7 +73,8 @@ registered under Task Scheduler and the model remains loopback-only.
 
 The GPU-layer limit is reduced from full offload to 20 after live monitoring observed one recoverable GPU
 device-loss event. The worker processes for 120 minutes, cools with the model stopped for 60 minutes, refuses
-startup at 72 C or above, and enters cooldown if runtime GPU temperature reaches 80 C. This trades latency for
+startup at 68 C or above, and enters cooldown if runtime GPU temperature reaches 78 C. Long model calls are
+checked every 15 seconds and cancelled safely at that limit before the leased task is retried. This trades latency for
 display, driver, and thermal headroom on the 6 GiB GTX 1660 Ti.
 
 ## Preliminary local calibration

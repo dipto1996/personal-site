@@ -23,6 +23,15 @@ import {
 import { applyWindowsWorkerResult, enqueueNextWindowsTask, prepareWindowsDeepJob } from "./workflow.js";
 
 const workerIdSchema = z.string().trim().min(3).max(200).regex(/^[a-z0-9_.:-]+$/i);
+const workerHeartbeatStatuses = new Set([
+  "idle",
+  "starting",
+  "claiming",
+  "processing",
+  "resource_waiting",
+  "cooling_down",
+  "blocked",
+]);
 const workerIdentitySchema = z.object({
   workerId: workerIdSchema,
   version: z.string().trim().min(1).max(120).default("unknown"),
@@ -94,6 +103,7 @@ export async function getWindowsWorkerQueue() {
       status: worker.status,
       version: worker.version,
       currentTaskId: worker.currentTaskId,
+      metadata: sanitizeMetadata(worker.metadata),
       lastSeenAt: worker.lastSeenAt,
     })),
   };
@@ -170,9 +180,13 @@ export async function heartbeatWindowsWorkerTask(input) {
       leaseSeconds: WORKER_LIMITS.leaseSeconds,
     });
   }
+  const requestedStatus = String(input?.status || "").trim();
+  const status = taskId
+    ? requestedStatus === "blocked" ? "blocked" : "processing"
+    : workerHeartbeatStatuses.has(requestedStatus) ? requestedStatus : "idle";
   await recordWorkerHeartbeat({
     ...identity,
-    status: input?.status === "blocked" ? "blocked" : taskId ? "processing" : "idle",
+    status,
     currentTaskId: taskId,
     metadata: sanitizeMetadata(input?.metadata),
   });

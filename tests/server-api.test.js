@@ -190,6 +190,22 @@ test("Windows worker endpoints require a token and commit triage results idempot
     assert.match(compatibleClaim.payload.task.leaseToken, /^lease_/);
     assert.equal(JSON.stringify(compatibleClaim.payload.packet).includes("DATABASE_URL"), false);
 
+    const thermalHeartbeat = await jsonFetch(server.baseUrl, "/api/job-search/worker/heartbeat", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        workerId: "thermal-test-worker",
+        version: workerVersion,
+        status: "cooling_down",
+        metadata: { gpuTemperatureCelsius: 78, cooldownUntil: "2026-07-14T18:00:00.000Z" },
+      }),
+    });
+    assert.equal(thermalHeartbeat.response.status, 200);
+    const queue = await jsonFetch(server.baseUrl, "/api/job-search/worker/queue", { headers: authorization });
+    const thermalWorker = queue.payload.workers.find((worker) => worker.workerId === "thermal-test-worker");
+    assert.equal(thermalWorker.status, "cooling_down");
+    assert.equal(thermalWorker.metadata.gpuTemperatureCelsius, 78);
+
     const output = {
       triage: {
         roleFamilyId: "ai_product_platform",

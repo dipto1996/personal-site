@@ -1163,6 +1163,13 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.ok(workerScript.indexOf("resourcesReadyBeforeClaim()") < workerScript.indexOf('workerFetch("claim"'));
 });
 
+test("private dashboard exposes the authenticated free-cloud calibration control", async () => {
+  const source = await readFile(path.resolve("apps/jobsearch/index.js"), "utf8");
+  assert.match(source, /data-cloud-calibration/);
+  assert.match(source, /\/api\/job-search\/calibration\/free-cloud/);
+  assert.match(source, /activeCalibrationSize !== 20/);
+});
+
 test("Windows updater preserves the protected credential and fast-forwards without model reinstallation", async () => {
   const script = await readFile(new URL("../scripts/windows/update-job-worker.ps1", import.meta.url), "utf8");
   assert.match(script, /Get-WorkerCredential/);

@@ -189,6 +189,9 @@ function renderLocalProcessing(local = {}, audit = null, loadingAction = "") {
   const worker = workers[0] || null;
   const queueControl = local.queueControl || {};
   const connected = workerIsConnected(worker);
+  const activeCalibrationSize = Array.isArray(queueControl.activeReleaseJobIds)
+    ? queueControl.activeReleaseJobIds.length
+    : 0;
   const workerDetail = workerStatusDetail(worker);
   return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Local inference</p><h2>Windows worker</h2></div><span>${escapeHtml(workerStatusLabel(worker))}</span></div>
     <div class="job-runtime-grid">
@@ -198,6 +201,7 @@ function renderLocalProcessing(local = {}, audit = null, loadingAction = "") {
     ${workerDetail ? `<p class="job-muted">${escapeHtml(workerDetail)}</p>` : ""}
     <div class="job-actions">
       <button type="button" class="button button-primary" data-queue-release ${!queueControl.holdNewTasks || !connected || loadingAction ? "disabled" : ""}>${loadingAction === "release" ? "Releasing..." : "Release calibration 20"}</button>
+      <button type="button" class="button button-primary" data-cloud-calibration ${activeCalibrationSize !== 20 || loadingAction ? "disabled" : ""}>${loadingAction === "cloud-calibration" ? "Starting..." : `Run free cloud calibration (${activeCalibrationSize})`}</button>
       <button type="button" class="button button-secondary" data-queue-retry ${!connected || loadingAction ? "disabled" : ""}>${loadingAction === "retry" ? "Retrying..." : "Retry failed"}</button>
       <button type="button" class="button button-secondary" data-run-audit ${loadingAction ? "disabled" : ""}>${loadingAction === "audit" ? "Auditing..." : "Audit 20 evaluations"}</button>
     </div>
@@ -533,6 +537,20 @@ export function mountJobSearch(root) {
         const result = await request("/api/job-search/local-queue/retry-failed", { method: "POST", body: JSON.stringify({ operationKey, limit: 20 }) });
         state.notice = `Requeued ${Number(result.retriedCount || 0)} failed tasks in the active cohort.`;
         await loadDashboard();
+      } catch (error) { state.error = error.message; }
+      state.loadingAction = ""; await render();
+    });
+    root.querySelector("[data-cloud-calibration]")?.addEventListener("click", async () => {
+      try {
+        state.loadingAction = "cloud-calibration"; state.error = ""; await render();
+        const operationKey = `dashboard-cloud-calibration-${Date.now()}`;
+        const result = await request("/api/job-search/calibration/free-cloud", {
+          method: "POST",
+          body: JSON.stringify({ operationKey, expectedSize: 20 }),
+        });
+        state.notice = `Free evaluator and critic run queued for ${Number(result.cohort?.length || 0)} jobs: ${result.runId}`;
+        await loadDashboard();
+        pollRun(result.runId).catch((error) => { state.error = error.message; render(); });
       } catch (error) { state.error = error.message; }
       state.loadingAction = ""; await render();
     });

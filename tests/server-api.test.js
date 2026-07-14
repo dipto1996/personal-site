@@ -250,6 +250,71 @@ test("Windows worker endpoints require a token and commit triage results idempot
   }
 });
 
+test("Windows worker resource pressure defers work without spending a model attempt", async () => {
+  const server = await startServer();
+  const authorization = { authorization: `Bearer ${process.env.JOBSEARCH_WORKER_TOKEN}` };
+
+  try {
+    const repository = await import(pathToFileURL(path.resolve("server/job-search/repository.js")).href);
+    const contract = await import(pathToFileURL(path.resolve("server/job-search/worker-contract.js")).href);
+    const job = await repository.upsertJob({
+      sourceId: `api_worker_thermal_${Date.now()}`,
+      canonicalUrl: "https://example.com/jobs/windows-worker-thermal",
+      title: "Director of Analytics",
+      normalizedTitle: "director of analytics",
+      company: "Example",
+      location: "New York, NY",
+      description: "Lead an analytics organization.",
+      sourceProvider: "test",
+      sourceQuery: "fixture",
+      contentHash: `api_worker_thermal_hash_${Date.now()}`,
+      roleFamilyId: "analytics_leadership",
+      status: "triage_pending",
+      details: {},
+    });
+    const queued = await repository.enqueueLocalTask({ jobId: job.id, taskType: "triage", revision: "api-worker-thermal" });
+    const claim = await jsonFetch(server.baseUrl, "/api/job-search/worker/claim", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({ workerId: "thermal-windows-worker", version: contract.REQUIRED_WORKER_VERSION }),
+    });
+    assert.equal(claim.response.status, 200);
+    assert.equal(claim.payload.task.id, queued.id);
+    assert.equal(claim.payload.task.attempt, 1);
+
+    const cooldownUntil = new Date(Date.now() + 900_000).toISOString();
+    const failure = await jsonFetch(server.baseUrl, "/api/job-search/worker/failure", {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        workerId: "thermal-windows-worker",
+        version: contract.REQUIRED_WORKER_VERSION,
+        taskId: claim.payload.task.id,
+        leaseToken: claim.payload.task.leaseToken,
+        error: "Windows resource guard blocked runtime: GPU temperature is 68 C.",
+        failureCategory: "resource_pressure",
+        retryAfterSeconds: 900,
+        cooldownUntil,
+      }),
+    });
+    assert.equal(failure.response.status, 200);
+    assert.equal(failure.payload.deferred, true);
+    assert.equal(failure.payload.status, "retry");
+
+    const deferred = await repository.getLocalTask(queued.id);
+    assert.equal(deferred.attempts, 0);
+    assert.equal(deferred.status, "retry");
+    assert.equal(deferred.leaseUntil, null);
+    const queue = await jsonFetch(server.baseUrl, "/api/job-search/worker/queue", { headers: authorization });
+    const worker = queue.payload.workers.find((item) => item.workerId === "thermal-windows-worker");
+    assert.equal(worker.status, "cooling_down");
+    assert.equal(worker.metadata.deferred, true);
+    assert.equal(worker.metadata.cooldownUntil, cooldownUntil);
+  } finally {
+    await server.close();
+  }
+});
+
 test("worker token can hold and release a bounded calibration cohort", async () => {
   process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
   const server = await startServer();

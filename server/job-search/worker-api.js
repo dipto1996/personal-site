@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   claimLocalTask,
   completeLocalTask,
+  deferLocalTask,
   failLocalTask,
   getJob,
   getLocalTask,
@@ -249,8 +250,34 @@ export async function failWindowsWorkerTask(input) {
   requireCompatibleWorker(identity);
   const task = await getLocalTask(identity.taskId);
   if (!task) throw httpError(404, "Worker task was not found.");
+  const failureCategory = ["resource_pressure", "infrastructure", "task_output"].includes(input.failureCategory)
+    ? input.failureCategory
+    : "task_output";
+  const errorMessage = String(input.error || "Windows worker task failed.");
+  if (failureCategory === "resource_pressure") {
+    const delaySeconds = Math.max(1, Math.min(3600, Number(input.retryAfterSeconds) || 60));
+    const deferred = await deferLocalTask(task.id, errorMessage, {
+      delaySeconds,
+      workerId: identity.workerId,
+      leaseToken: identity.leaseToken,
+    });
+    if (!deferred) throw httpError(409, "Worker task could not be deferred.");
+    const cooldownUntil = String(input.cooldownUntil || "").slice(0, 80);
+    await recordWorkerHeartbeat({
+      workerId: identity.workerId,
+      version: identity.version,
+      status: cooldownUntil ? "cooling_down" : "resource_waiting",
+      metadata: {
+        deferredTaskType: task.taskType,
+        deferred: true,
+        retryAfterSeconds: delaySeconds,
+        ...(cooldownUntil ? { cooldownUntil } : {}),
+      },
+    });
+    return { ok: true, taskId: task.id, status: deferred?.status, retry: true, deferred: true };
+  }
   const retry = input.retry !== false && task.attempts < 3;
-  const failed = await failLocalTask(task.id, String(input.error || "Windows worker task failed."), {
+  const failed = await failLocalTask(task.id, errorMessage, {
     retry,
     delaySeconds: Math.min(1800, 60 * (2 ** Math.max(0, task.attempts - 1))),
     workerId: identity.workerId,
@@ -262,5 +289,5 @@ export async function failWindowsWorkerTask(input) {
     status: retry ? "idle" : "blocked",
     metadata: { failedTaskType: task.taskType, retry },
   });
-  return { ok: true, taskId: task.id, status: failed?.status, retry };
+  return { ok: true, taskId: task.id, status: failed?.status, retry, deferred: false };
 }

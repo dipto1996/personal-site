@@ -39,7 +39,10 @@ const requestedGpuLayers = Number(process.env.JOBSEARCH_LOCAL_GPU_LAYERS ?? "0")
 const gpuLayers = Number.isFinite(requestedGpuLayers)
   ? Math.max(0, Math.min(20, requestedGpuLayers))
   : 0;
-const cpuThreads = Math.max(1, Math.min(8, Number(process.env.JOBSEARCH_LOCAL_CPU_THREADS || 2) || 2));
+const cpuThreads = Math.max(1, Math.min(8, Number(process.env.JOBSEARCH_LOCAL_CPU_THREADS || 1) || 1));
+const batchThreads = Math.max(1, Math.min(8, Number(process.env.JOBSEARCH_LOCAL_BATCH_THREADS || cpuThreads) || cpuThreads));
+const interPassCooldownSeconds = Math.max(0, Math.min(900, Number(process.env.JOBSEARCH_WORKER_INTER_PASS_COOLDOWN_SECONDS || 90) || 0));
+const postTaskCooldownSeconds = Math.max(0, Math.min(1800, Number(process.env.JOBSEARCH_WORKER_POST_TASK_COOLDOWN_SECONDS || 180) || 0));
 const runtimeDir = process.env.JOBSEARCH_WORKER_RUNTIME_DIR || path.join(process.env.LOCALAPPDATA || os.homedir(), "DiptopalJobWorker");
 const logDir = path.join(runtimeDir, "logs");
 const thermalStatePath = path.join(runtimeDir, "thermal-cycle.json");
@@ -130,7 +133,7 @@ let modelProcess = null;
 let lastModelUseAt = 0;
 
 async function lowerProcessPriority(pid) {
-  const command = `try { (Get-Process -Id ${Number(pid)}).PriorityClass='BelowNormal' } catch {}`;
+  const command = `try { (Get-Process -Id ${Number(pid)}).PriorityClass='Idle' } catch {}`;
   const process = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
     windowsHide: true,
     stdio: "ignore",
@@ -153,6 +156,8 @@ async function startModel() {
       "--ctx-size", String(WORKER_LIMITS.contextTokens),
       "--parallel", String(WORKER_LIMITS.concurrency),
       "--threads", String(cpuThreads),
+      "--threads-batch", String(batchThreads),
+      "--poll", "0",
       "--n-gpu-layers", String(gpuLayers),
       ...(gpuLayers === 0 ? ["--device", "none", "--no-kv-offload"] : []),
       "--no-webui",
@@ -165,7 +170,7 @@ async function startModel() {
   }
   modelProcess.once("exit", () => { modelProcess = null; });
   lowerProcessPriority(modelProcess.pid);
-  log("model_starting", { pid: modelProcess.pid, gpuLayers, cpuThreads, resources: evaluation.summary });
+  log("model_starting", { pid: modelProcess.pid, gpuLayers, cpuThreads, batchThreads, resources: evaluation.summary });
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if (await modelHealth()) {
@@ -274,14 +279,26 @@ async function callLocalPass(pass) {
 async function evaluateTask(task, packet) {
   const output = {};
   const usage = { inputTokens: 0, outputTokens: 0, passes: [] };
-  for (const passName of getWorkerPasses(task.taskType)) {
+  const passNames = getWorkerPasses(task.taskType);
+  for (const [passIndex, passName] of passNames.entries()) {
     await assertResourcesSafe({ phase: "runtime" });
+    await startModel();
     const pass = getWorkerPass(task.taskType, passName, packet, output);
     const response = await callLocalPass(pass);
     output[pass.name] = response.result;
     usage.inputTokens += response.usage.inputTokens;
     usage.outputTokens += response.usage.outputTokens;
     usage.passes.push({ name: pass.name, ...response.usage });
+    if (passIndex < passNames.length - 1 && interPassCooldownSeconds > 0) {
+      await stopModel("inter_pass_rest");
+      log("inter_pass_rest_started", {
+        taskId: task.id,
+        taskType: task.taskType,
+        completedPass: pass.name,
+        restSeconds: interPassCooldownSeconds,
+      });
+      await sleep(interPassCooldownSeconds * 1000);
+    }
   }
   return { output, usage };
 }
@@ -317,6 +334,7 @@ let stopping = false;
 let processed = 0;
 let completed = 0;
 let failed = 0;
+let deferred = 0;
 let consecutiveModelFailures = 0;
 let consecutiveApiFailures = 0;
 process.on("SIGINT", () => { stopping = true; });
@@ -407,6 +425,33 @@ async function thermalWindowReady() {
   return false;
 }
 
+async function restBetweenTasks() {
+  if (postTaskCooldownSeconds <= 0) return;
+  await stopModel("post_task_rest");
+  const restUntil = Date.now() + postTaskCooldownSeconds * 1000;
+  log("post_task_rest_started", { restSeconds: postTaskCooldownSeconds, restUntil: new Date(restUntil).toISOString() });
+  while (!stopping && Date.now() < restUntil) {
+    await workerFetch("heartbeat", {
+      method: "POST",
+      body: {
+        workerId,
+        version,
+        status: "cooling_down",
+        metadata: {
+          model: modelName,
+          processed,
+          completed,
+          failed,
+          deferred,
+          reason: "post_task_rest",
+          cooldownUntil: new Date(restUntil).toISOString(),
+        },
+      },
+    }).catch(() => null);
+    await sleep(Math.min(30_000, Math.max(1, restUntil - Date.now())));
+  }
+}
+
 await waitForWorkerApi();
 await persistThermalState();
 log("worker_started", {
@@ -416,9 +461,12 @@ log("worker_started", {
   context: WORKER_LIMITS.contextTokens,
   concurrency: WORKER_LIMITS.concurrency,
   cpuThreads,
+  batchThreads,
   activeMinutes,
   cooldownMinutes,
   temperatureCooldownMinutes,
+  interPassCooldownSeconds,
+  postTaskCooldownSeconds,
   thermalPhase: thermalState.phase,
   thermalUntil: new Date(thermalState.until).toISOString(),
 });
@@ -450,7 +498,8 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
 
   const task = claim.task;
   processed += 1;
-  const stopHeartbeat = startHeartbeat(task, () => ({ processed, completed, failed }));
+  let taskCompleted = false;
+  const stopHeartbeat = startHeartbeat(task, () => ({ processed, completed, failed, deferred }));
   try {
     await assertResourcesSafe({ phase: await modelHealth() ? "runtime" : "startup" });
     await startModel();
@@ -462,19 +511,25 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
       body: { workerId, version, taskId: task.id, leaseToken: task.leaseToken, resultId, model: modelName, ...evaluation },
     });
     completed += 1;
+    taskCompleted = true;
     consecutiveModelFailures = 0;
-    log("task_completed", { taskId: task.id, taskType: task.taskType, processed, completed, failed });
+    log("task_completed", { taskId: task.id, taskType: task.taskType, processed, completed, failed, deferred });
   } catch (error) {
-    failed += 1;
     const failureCategory = workerFailureCategory(error);
+    const resourcePressure = failureCategory === "resource_pressure";
+    if (resourcePressure) deferred += 1;
+    else failed += 1;
     const infrastructureFailure = failureCategory === "infrastructure";
     consecutiveModelFailures = infrastructureFailure ? consecutiveModelFailures + 1 : 0;
-    const retry = shouldRetryWorkerTask(task);
-    if (failureCategory === "resource_pressure") {
+    const retry = resourcePressure || shouldRetryWorkerTask(task);
+    if (resourcePressure) {
       await stopModel("resource_pressure");
       if (/temperature/i.test(String(error.message || error))) await beginCooldown("temperature_guard");
       else await sleep(15_000);
     }
+    const retryAfterSeconds = resourcePressure && thermalState.phase === "cooldown"
+      ? Math.max(1, Math.ceil((thermalState.until - Date.now()) / 1000))
+      : 60;
     await workerFetch("failure", {
       method: "POST",
       body: {
@@ -484,9 +539,14 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
         leaseToken: task.leaseToken,
         error: String(error.message || error).slice(0, 1000),
         retry,
+        failureCategory,
+        retryAfterSeconds,
+        ...(resourcePressure && thermalState.phase === "cooldown"
+          ? { cooldownUntil: new Date(thermalState.until).toISOString() }
+          : {}),
       },
     }).catch(() => null);
-    log("task_failed", {
+    log(resourcePressure ? "task_deferred" : "task_failed", {
       taskId: task.id,
       taskType: task.taskType,
       error: String(error.message || error).slice(0, 500),
@@ -501,12 +561,13 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
   } finally {
     stopHeartbeat();
   }
+  if (taskCompleted && (!maxTasks || processed < maxTasks)) await restBetweenTasks();
 }
 
 await workerFetch("heartbeat", {
   method: "POST",
-  body: { workerId, version, status: "idle", metadata: { processed, completed, failed, stopped: true } },
+  body: { workerId, version, status: "idle", metadata: { processed, completed, failed, deferred, stopped: true } },
 }).catch(() => null);
 await stopModel("worker_exit");
-log("worker_stopped", { processed, completed, failed });
+log("worker_stopped", { processed, completed, failed, deferred });
 process.exitCode = failed ? 1 : 0;

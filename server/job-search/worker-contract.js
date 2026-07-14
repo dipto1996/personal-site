@@ -11,7 +11,7 @@ import {
   triageSchema,
 } from "./schemas.js";
 
-export const WORKER_PROTOCOL_VERSION = "job-worker-2026-07-v3";
+export const WORKER_PROTOCOL_VERSION = "job-worker-2026-07-v4";
 export const REQUIRED_WORKER_VERSION = `windows-qwen-worker-${WORKER_PROTOCOL_VERSION}`;
 const INTERVIEW_RISK_INSTRUCTIONS = "Infer interview risk from the role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work do not alone prove a coding round.";
 export const WORKER_LIMITS = Object.freeze({

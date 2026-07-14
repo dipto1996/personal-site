@@ -30,7 +30,7 @@ $plainLength = $credential.GetNetworkCredential().Password.Length
 if ($plainLength -lt 32) { throw 'JOBSEARCH_WORKER_TOKEN must contain at least 32 characters.' }
 
 $config = [ordered]@{
-  protocolVersion = 'job-worker-2026-07-v3'
+  protocolVersion = 'job-worker-2026-07-v4'
   repositoryRoot = $script:RepositoryRoot
   endpoint = $Endpoint.TrimEnd('/')
   nodePath = (Resolve-Path -LiteralPath $NodePath).Path
@@ -44,12 +44,15 @@ $config = [ordered]@{
   contextTokens = 8192
   thermalProfile = 'cpu-conservative'
   gpuLayers = 0
-  cpuThreads = 2
+  cpuThreads = 1
+  batchThreads = 1
   concurrency = 1
   idleShutdownSeconds = 300
   activeMinutes = 120
   cooldownMinutes = 60
   temperatureCooldownMinutes = 15
+  interPassCooldownSeconds = 90
+  postTaskCooldownSeconds = 180
   configuredAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $config | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:WorkerConfigPath -Encoding utf8
@@ -69,11 +72,14 @@ if ($RegisterScheduledTask -and -not $SkipScheduledTask) {
   thermalProfile = $config.thermalProfile
   gpuLayers = $config.gpuLayers
   cpuThreads = $config.cpuThreads
+  batchThreads = $config.batchThreads
   contextTokens = $config.contextTokens
   concurrency = $config.concurrency
   activeMinutes = $config.activeMinutes
   cooldownMinutes = $config.cooldownMinutes
   temperatureCooldownMinutes = $config.temperatureCooldownMinutes
+  interPassCooldownSeconds = $config.interPassCooldownSeconds
+  postTaskCooldownSeconds = $config.postTaskCooldownSeconds
   credentialProtection = 'Windows DPAPI, current user'
   scheduledTask = ($RegisterScheduledTask -and -not $SkipScheduledTask)
   publicListener = $false

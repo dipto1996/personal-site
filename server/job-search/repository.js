@@ -1672,6 +1672,45 @@ export async function failLocalTask(taskId, error, { retry = true, delaySeconds 
   return row || null;
 }
 
+export async function deferLocalTask(taskId, reason, { delaySeconds = 60, workerId, leaseToken } = {}) {
+  await ensureJobSearchRepository();
+  const timestamp = nowIso();
+  const boundedDelaySeconds = Math.max(1, Math.min(3600, Number(delaySeconds) || 60));
+  const availableAt = new Date(Date.now() + boundedDelaySeconds * 1000).toISOString();
+  const message = String(reason?.message || reason || "Local task deferred.").slice(0, 2000);
+  if (workerId || leaseToken) assertTaskLease(await getLocalTask(taskId), { workerId, leaseToken });
+  if (!hasDatabase()) {
+    return mutateLocal((db) => {
+      const task = db.localTasks.find((item) => item.id === taskId);
+      if (!task) return null;
+      if (workerId || leaseToken) assertTaskLease(task, { workerId, leaseToken });
+      Object.assign(task, {
+        status: "retry",
+        attempts: Math.max(0, Number(task.attempts || 0) - 1),
+        lastError: message,
+        availableAt,
+        leaseUntil: null,
+        leaseToken: "",
+        leasedBy: "",
+        updatedAt: timestamp,
+      });
+      return structuredClone(task);
+    });
+  }
+  const sql = getSql();
+  const [row] = await sql`UPDATE js_local_tasks SET status='retry',
+    attempts=GREATEST(attempts - 1, 0), last_error=${message}, available_at=${availableAt},
+    lease_until=NULL, lease_token=NULL, leased_by=NULL, updated_at=${timestamp}
+    WHERE id=${taskId}
+      AND (${workerId || null}::text IS NULL OR (status='processing' AND leased_by=${workerId} AND lease_token=${leaseToken}))
+    RETURNING id, task_key AS "taskKey", job_id AS "jobId",
+    task_type AS "taskType", status, priority, attempts, payload, result,
+    last_error AS "lastError", available_at AS "availableAt", lease_until AS "leaseUntil",
+    leased_by AS "leasedBy", lease_token AS "leaseToken", result_id AS "resultId",
+    created_at AS "createdAt", updated_at AS "updatedAt", completed_at AS "completedAt"`;
+  return row || null;
+}
+
 export async function recordWorkerHeartbeat({ workerId, status = "idle", version = "", currentTaskId = "", metadata = {} }) {
   await ensureJobSearchRepository();
   const timestamp = nowIso();

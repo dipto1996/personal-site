@@ -489,6 +489,26 @@ test("local work queue is idempotent and leases one task at a time", async () =>
   assert.equal(completed.status, "completed");
 });
 
+test("resource-pressure deferral releases the lease without consuming a model attempt", async () => {
+  const job = await seedJob({ sourceId: "local_queue_resource_deferral" });
+  const queued = await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: "deep:thermal-v1" });
+  const claimed = await repository.claimLocalTask({ workerId: "thermal-worker" });
+  assert.equal(claimed.id, queued.id);
+  assert.equal(claimed.attempts, 1);
+
+  const deferred = await repository.deferLocalTask(claimed.id, "Temperature guard reached 68 C.", {
+    delaySeconds: 900,
+    workerId: "thermal-worker",
+    leaseToken: claimed.leaseToken,
+  });
+  assert.equal(deferred.status, "retry");
+  assert.equal(deferred.attempts, 0);
+  assert.equal(deferred.leaseUntil, null);
+  assert.equal(deferred.leasedBy || null, null);
+  assert.match(deferred.lastError, /Temperature guard/);
+  assert.ok(new Date(deferred.availableAt).getTime() > Date.now() + 800_000);
+});
+
 test("new task revisions supersede stale stages and downstream work", async () => {
   const job = await seedJob({ sourceId: "local_queue_revision" });
   const critic = await repository.enqueueLocalTask({ jobId: job.id, taskType: "critic", revision: "critic:v1" });
@@ -1056,17 +1076,24 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(statusScript, /if \(\$process\) \{ @\(\) \} else \{ @\('--startup'\) \}/);
   assert.match(setupScript, /thermalProfile = 'cpu-conservative'/);
   assert.match(setupScript, /gpuLayers = 0/);
-  assert.match(setupScript, /cpuThreads = 2/);
+  assert.match(setupScript, /cpuThreads = 1/);
+  assert.match(setupScript, /batchThreads = 1/);
   assert.match(setupScript, /activeMinutes = 120/);
   assert.match(setupScript, /cooldownMinutes = 60/);
   assert.match(setupScript, /temperatureCooldownMinutes = 15/);
+  assert.match(setupScript, /interPassCooldownSeconds = 90/);
+  assert.match(setupScript, /postTaskCooldownSeconds = 180/);
   assert.match(startScript, /JOBSEARCH_LOCAL_GPU_LAYERS/);
+  assert.match(startScript, /JOBSEARCH_LOCAL_BATCH_THREADS/);
   assert.match(startScript, /JOBSEARCH_WORKER_ACTIVE_MINUTES/);
   assert.match(startScript, /JOBSEARCH_WORKER_TEMPERATURE_COOLDOWN_MINUTES/);
   assert.doesNotMatch(startScript, /resourceGuardScript --startup/);
   assert.match(workerScript, /JOBSEARCH_LOCAL_GPU_LAYERS \?\? "0"/);
   assert.match(workerScript, /Math\.max\(0, Math\.min\(20, requestedGpuLayers\)\)/);
   assert.match(workerScript, /gpuLayers === 0 \? \["--device", "none", "--no-kv-offload"\] : \[\]/);
+  assert.match(workerScript, /"--threads-batch", String\(batchThreads\)/);
+  assert.match(workerScript, /"--poll", "0"/);
+  assert.match(workerScript, /PriorityClass='Idle'/);
   assert.match(workerScript, /scheduled_two_hour_limit/);
   assert.match(workerScript, /pass\.thinking \? "think" : "no_think"/);
   assert.match(workerScript, /resource_wait_before_claim/);
@@ -1077,6 +1104,9 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(workerScript, /MODEL_PASS_TIMEOUT_MS = 30 \* 60_000/);
   assert.match(workerScript, /AbortSignal\.timeout\(MODEL_PASS_TIMEOUT_MS\)/);
   assert.match(workerScript, /setInterval\([\s\S]*RUNTIME_RESOURCE_CHECK_MS\)/);
+  assert.match(workerScript, /inter_pass_rest_started/);
+  assert.match(workerScript, /post_task_rest_started/);
+  assert.match(workerScript, /failureCategory/);
   assert.ok(workerScript.indexOf("resourcesReadyBeforeClaim()") < workerScript.indexOf('workerFetch("claim"'));
 });
 

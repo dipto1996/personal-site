@@ -26,10 +26,13 @@ $env:JOBSEARCH_LOCAL_MODEL_PATH = $config.modelPath
 $env:JOBSEARCH_LOCAL_LLM_MODEL = $config.modelName
 $env:JOBSEARCH_LOCAL_LLM_BASE_URL = $config.modelBaseUrl
 $env:JOBSEARCH_LOCAL_GPU_LAYERS = if ($null -ne $config.gpuLayers) { [string][Math]::Max(0, [Math]::Min(20, [int]$config.gpuLayers)) } else { '0' }
-$env:JOBSEARCH_LOCAL_CPU_THREADS = if ($null -ne $config.cpuThreads) { [string]$config.cpuThreads } else { '2' }
+$env:JOBSEARCH_LOCAL_CPU_THREADS = if ($null -ne $config.cpuThreads) { [string]$config.cpuThreads } else { '1' }
+$env:JOBSEARCH_LOCAL_BATCH_THREADS = if ($null -ne $config.batchThreads) { [string]$config.batchThreads } else { '1' }
 $env:JOBSEARCH_WORKER_ACTIVE_MINUTES = if ($null -ne $config.activeMinutes) { [string]$config.activeMinutes } else { '120' }
 $env:JOBSEARCH_WORKER_COOLDOWN_MINUTES = if ($null -ne $config.cooldownMinutes) { [string]$config.cooldownMinutes } else { '60' }
 $env:JOBSEARCH_WORKER_TEMPERATURE_COOLDOWN_MINUTES = if ($null -ne $config.temperatureCooldownMinutes) { [string]$config.temperatureCooldownMinutes } else { '15' }
+$env:JOBSEARCH_WORKER_INTER_PASS_COOLDOWN_SECONDS = if ($null -ne $config.interPassCooldownSeconds) { [string]$config.interPassCooldownSeconds } else { '90' }
+$env:JOBSEARCH_WORKER_POST_TASK_COOLDOWN_SECONDS = if ($null -ne $config.postTaskCooldownSeconds) { [string]$config.postTaskCooldownSeconds } else { '180' }
 
 $workerArgs = @("`"$($config.workerScript)`"")
 if ($Once) { $workerArgs += '--once' }

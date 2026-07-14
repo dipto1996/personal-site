@@ -33,10 +33,13 @@ try {
   thermalProfile = if ($config -and $null -ne $config.thermalProfile) { $config.thermalProfile } else { 'legacy' }
   gpuLayers = if ($config -and $null -ne $config.gpuLayers) { $config.gpuLayers } else { $null }
   cpuThreads = if ($config -and $null -ne $config.cpuThreads) { $config.cpuThreads } else { $null }
+  batchThreads = if ($config -and $null -ne $config.batchThreads) { $config.batchThreads } else { $null }
   contextTokens = if ($config) { $config.contextTokens } else { $null }
   concurrency = if ($config) { $config.concurrency } else { $null }
   activeMinutes = if ($config -and $null -ne $config.activeMinutes) { $config.activeMinutes } else { 120 }
   cooldownMinutes = if ($config -and $null -ne $config.cooldownMinutes) { $config.cooldownMinutes } else { 60 }
+  interPassCooldownSeconds = if ($config -and $null -ne $config.interPassCooldownSeconds) { $config.interPassCooldownSeconds } else { 90 }
+  postTaskCooldownSeconds = if ($config -and $null -ne $config.postTaskCooldownSeconds) { $config.postTaskCooldownSeconds } else { 180 }
   thermalCycle = $thermalCycle
   resourceGuard = $resources
   credentialPresent = Test-Path -LiteralPath $script:WorkerCredentialPath

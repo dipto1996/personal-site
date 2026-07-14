@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "job-search-intelligence-"));
 process.env.TRADEGRAPH_DATA_DIR = tempDir;
@@ -444,6 +444,33 @@ test("new task revisions supersede stale stages and downstream work", async () =
   assert.equal(tasks.find((task) => task.id === critic.id).status, "superseded");
   assert.equal(tasks.find((task) => task.id === firstDeep.id).status, "superseded");
   assert.equal(tasks.find((task) => task.id === latestDeep.id).status, "queued");
+});
+
+test("a new revision supersedes an expired lease but preserves a genuinely active lease", async () => {
+  const expiredJob = await seedJob({ sourceId: "expired_processing_revision" });
+  const expired = await repository.enqueueLocalTask({ jobId: expiredJob.id, taskType: "deep", revision: "deep:v1" });
+  const claimedExpired = await repository.claimLocalTask({ workerId: "expired-worker", leaseSeconds: 60 });
+  await repository.setLocalTaskStatus(claimedExpired.id, {
+    status: "processing",
+    availableAt: new Date(Date.now() - 120_000).toISOString(),
+    clearLease: false,
+  });
+  const localPath = path.join(tempDir, "job-search-intelligence.json");
+  const localState = JSON.parse(await readFile(localPath, "utf8"));
+  localState.localTasks.find((item) => item.id === expired.id).leaseUntil = new Date(Date.now() - 60_000).toISOString();
+  await writeFile(localPath, JSON.stringify(localState, null, 2));
+  const replacement = await repository.enqueueLocalTask({ jobId: expiredJob.id, taskType: "triage", revision: "triage:v2" });
+  const expiredTasks = await repository.listLocalTasks({ limit: 20 });
+  assert.equal(expiredTasks.find((task) => task.id === expired.id).status, "superseded");
+  assert.equal(expiredTasks.find((task) => task.id === replacement.id).status, "queued");
+
+  await rm(path.join(tempDir, "job-search-intelligence.json"), { force: true });
+  const activeJob = await seedJob({ sourceId: "active_processing_revision" });
+  const active = await repository.enqueueLocalTask({ jobId: activeJob.id, taskType: "deep", revision: "deep:v1" });
+  await repository.claimLocalTask({ workerId: "active-worker", leaseSeconds: 900 });
+  await repository.enqueueLocalTask({ jobId: activeJob.id, taskType: "triage", revision: "triage:v2" });
+  const activeTasks = await repository.listLocalTasks({ limit: 20 });
+  assert.equal(activeTasks.find((task) => task.id === active.id).status, "processing");
 });
 
 test("every current deep evaluation, including a hard-blocked pass, receives an independent critic task", async () => {

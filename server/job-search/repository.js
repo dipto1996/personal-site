@@ -1331,6 +1331,8 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
   // both stale upstream work and no-longer-valid downstream work.
   const supersededTypes = ["triage", "deep", "critic", "outreach"];
   const pendingStatuses = new Set(["queued", "retry", "held"]);
+  const canSupersede = (task) => pendingStatuses.has(task.status)
+    || (task.status === "processing" && task.leaseUntil && new Date(task.leaseUntil) <= new Date(timestamp));
   if (!hasDatabase()) {
     return mutateLocal((db) => {
       const existing = db.localTasks.find((task) => task.taskKey === taskKey);
@@ -1348,7 +1350,7 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
         current = record;
       }
       db.localTasks.forEach((task) => {
-        if (task.id === current.id || task.jobId !== jobId || !supersededTypes.includes(task.taskType) || !pendingStatuses.has(task.status)) return;
+        if (task.id === current.id || task.jobId !== jobId || !supersededTypes.includes(task.taskType) || !canSupersede(task)) return;
         Object.assign(task, {
           status: "superseded",
           completedAt: timestamp,
@@ -1393,7 +1395,10 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
     WHERE job_id=${jobId}
       AND id<>${row.id}
       AND task_type = ANY(${supersededTypes})
-      AND status = ANY(${[...pendingStatuses]})`;
+      AND (
+        status = ANY(${[...pendingStatuses]})
+        OR (status='processing' AND lease_until <= NOW())
+      )`;
   return row;
 }
 

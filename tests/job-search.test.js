@@ -1074,6 +1074,8 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(workerScript, /cooldownDurationForReason/);
   assert.match(workerScript, /AbortSignal\.any/);
   assert.match(workerScript, /RUNTIME_RESOURCE_CHECK_MS = 5_000/);
+  assert.match(workerScript, /MODEL_PASS_TIMEOUT_MS = 30 \* 60_000/);
+  assert.match(workerScript, /AbortSignal\.timeout\(MODEL_PASS_TIMEOUT_MS\)/);
   assert.match(workerScript, /setInterval\([\s\S]*RUNTIME_RESOURCE_CHECK_MS\)/);
   assert.ok(workerScript.indexOf("resourcesReadyBeforeClaim()") < workerScript.indexOf('workerFetch("claim"'));
 });

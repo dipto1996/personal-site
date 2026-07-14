@@ -15,6 +15,7 @@ import { cooldownDurationForReason, resolveThermalCycleState, shouldRetryWorkerT
 
 const args = new Set(process.argv.slice(2));
 const RUNTIME_RESOURCE_CHECK_MS = 5_000;
+const MODEL_PASS_TIMEOUT_MS = 30 * 60_000;
 const valueArg = (name, fallback) => {
   const item = [...args].find((argument) => argument.startsWith(`${name}=`));
   return item ? item.slice(name.length + 1) : fallback;
@@ -235,7 +236,7 @@ async function callLocalPass(pass) {
           cache_prompt: true,
           response_format: responseFormat(pass.schema, `windows_${pass.name}`),
         }),
-        signal: AbortSignal.any([AbortSignal.timeout(600_000), controller.signal]),
+        signal: AbortSignal.any([AbortSignal.timeout(MODEL_PASS_TIMEOUT_MS), controller.signal]),
       });
     } catch (error) {
       throw pressureError || error;

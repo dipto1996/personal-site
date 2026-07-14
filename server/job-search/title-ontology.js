@@ -93,6 +93,7 @@ export const FUNCTION_CONCEPTS = [
     phrases: phrase(
       "ai product", "genai product", "ml product", "data product", "data products",
       "ai platform", "ml platform", "intelligence product", "decision product",
+      "technical product manager", "platform product manager", "decisioning product manager",
       "product experimentation", "product insights", "product data science", "analytics product",
       "data capabilities", "decisioning product", "insights product",
     ),
@@ -277,7 +278,7 @@ export function buildBroadSearchShards() {
     },
     {
       id: "ai-product-operator",
-      query: `((("AI product" OR "AI strategy" OR "AI enablement" OR "AI governance" OR "Responsible AI" OR "LLM evaluation") ${seniority}) OR "AI Operator" OR "Context Engineer")`,
+      query: `((("AI product" OR "AI strategy" OR "AI enablement" OR "AI governance" OR "Responsible AI" OR "LLM evaluation" OR "technical product manager" OR "platform product manager" OR "decisioning product manager") ${seniority}) OR "AI Operator" OR "Context Engineer")`,
     },
     {
       id: "finserv",

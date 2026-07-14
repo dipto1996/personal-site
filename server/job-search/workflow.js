@@ -71,7 +71,7 @@ import { normalizeTimestampInput } from "./utils.js";
 import { rotatingWatchlistCompanies } from "./watchlist.js";
 import { parseWorkerOutput } from "./worker-contract.js";
 
-export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v5";
+export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v6";
 
 const INTERVIEW_RISK_INSTRUCTIONS = "Infer interview risk from the role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work do not alone prove a coding round.";
 
@@ -467,6 +467,72 @@ export async function persistExtractedJobs(jobs = []) {
   return normalizeAndPersist(uniqueJobs(jobs));
 }
 
+const TRIAGE_TRANSFERABLE_RESPONSIBILITY_SIGNALS = [
+  {
+    id: "analytics_insights",
+    pattern: /\b(analytics?|insights?|measurement|metrics?|forecasting|decision intelligence|decision support|performance management)\b/i,
+  },
+  {
+    id: "experimentation_science",
+    pattern: /\b(experiment(?:ation|s)?|a\/?b test(?:ing)?|causal inference|statistical|predictive model(?:ing)?|data science|machine learning)\b/i,
+  },
+  {
+    id: "data_decision_product",
+    pattern: /\b(data product|analytics product|intelligence platform|decision(?:ing)? platform|product strategy|product development|product roadmap|technical product manager|platform product manager)\b/i,
+  },
+  {
+    id: "data_strategy_architecture",
+    pattern: /\b(data strategy|analytics strategy|data model(?:s|ing)?|data flow(?:s)?|decision logic|decision framework(?:s)?|data architecture|data ecosystem)\b/i,
+  },
+  {
+    id: "customer_growth_marketing",
+    pattern: /\b(customer|marketing|growth|retention|acquisition|lifecycle|commercial) (?:analytics?|insights?|science|strategy|measurement)\b/i,
+  },
+  {
+    id: "cross_functional_builder",
+    pattern: /\b(0[- ]to[- ]1|zero[- ]to[- ]one|cross[- ]functional|stakeholder leadership|operating model|product builder|build(?:ing)? foundational capabilities)\b/i,
+  },
+];
+
+export function applyHighRecallTriageSafety(job, evaluation) {
+  if (!evaluation || evaluation.relevance !== "irrelevant") return evaluation;
+
+  const titleMatch = classifyCandidateTitle(job?.title || "");
+  if (titleMatch.excludedConcepts.length && !titleMatch.eligible) return evaluation;
+
+  const responsibilityText = `${job?.title || ""}\n${job?.description || ""}`;
+  const matchedSignals = TRIAGE_TRANSFERABLE_RESPONSIBILITY_SIGNALS
+    .filter((signal) => signal.pattern.test(responsibilityText))
+    .map((signal) => signal.id);
+  const qualifiedProductTitle = /\b(technical|platform|data|analytics|ai|ml|decision(?:ing)?|intelligence)\s+product\s+(manager|lead|director|head)\b/i
+    .test(job?.title || "");
+  const plausibleTransferableScope = matchedSignals.length >= 3
+    || (matchedSignals.length >= 2 && (titleMatch.eligible || qualifiedProductTitle));
+  if (!plausibleTransferableScope) return evaluation;
+
+  const originalConfidence = Number(evaluation.confidence) || 0;
+  const overrideReason = `High-recall safety override: transferable responsibility signals (${matchedSignals.join(", ")}) require deep review.`;
+  return {
+    ...evaluation,
+    relevance: "uncertain",
+    confidence: Math.min(originalConfidence, 0.8),
+    roleFamilyId: evaluation.roleFamilyId === "exploratory" && titleMatch.familyId !== "exploratory"
+      ? titleMatch.familyId
+      : evaluation.roleFamilyId,
+    scopeSummary: evaluation.scopeSummary === "No scope summary returned."
+      ? "Plausible analytics, data, strategy, or product-building scope requires deep review."
+      : evaluation.scopeSummary,
+    reasons: [...new Set([...(evaluation.reasons || []), overrideReason])].slice(0, 8),
+    unknowns: [...new Set([...(evaluation.unknowns || []), "Triage rejection conflicted with transferable responsibility evidence."])].slice(0, 8),
+    safetyOverride: {
+      policy: "high_recall_transferable_scope_v1",
+      originalRelevance: evaluation.relevance,
+      originalConfidence,
+      matchedSignals,
+    },
+  };
+}
+
 function triageMessages(batch) {
   return [
     {
@@ -475,7 +541,7 @@ function triageMessages(batch) {
     },
     {
       role: "user",
-      content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nTriage policy:\n${JSON.stringify(TARGET_PROFILE.evaluationPolicy, null, 2)}\n\nEvaluate only primary responsibility fit. Data-science management, analytics leadership, experimentation, product/growth/marketing/customer analytics, strategy analytics, decision science, data products, Business Manager roles with analytical ownership, and cross-functional product building are direct or plausible matches. Different industries, public-sector work, lack of AI or financial-services content, US onsite/hybrid work, compensation, visa evidence, and interview format must not reduce relevance; those are separate later gates. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data science do not make the function irrelevant. Use irrelevant only when supplied responsibilities clearly show a predominantly unrelated function such as software implementation, pure data-engineering IC delivery, IT support, sales, legal, or clinical work. Use uncertain for incomplete, mixed, or plausibly transferable descriptions. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.\n\nJobs:\n${JSON.stringify(batch.map((job) => ({ sourceId: job.sourceId, title: job.title, company: job.company, location: job.location, description: job.description.slice(0, 4000) })), null, 2)}\n\nReturn {"jobs":[{"sourceId":"...","evaluation":{"roleFamilyId":"...","relevance":"relevant|uncertain|irrelevant","confidence":0.0,"scopeSummary":"...","codingIntensity":"low|medium|high|unknown","seniority":"too_junior|aligned|stretch|unknown","reasons":[],"unknowns":[]}}]}`,
+      content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nTriage policy:\n${JSON.stringify(TARGET_PROFILE.evaluationPolicy, null, 2)}\n\nEvaluate only primary responsibility fit. Data-science management, analytics leadership, experimentation, product/growth/marketing/customer analytics, strategy analytics, decision science, data products, Business Manager roles with analytical ownership, technical/platform product management, decision-intelligence platforms, and cross-functional 0-to-1 product building are direct or plausible matches. A title containing Technical Product Manager, Platform Product Manager, Service Intelligence, Decision Intelligence, or an unfamiliar product label is not a rejection reason when the responsibilities include data, analytics, decisioning, product strategy, or AI/ML. Different industries, public-sector work, lack of AI or financial-services content, US onsite/hybrid work, compensation, visa evidence, and interview format must not reduce relevance; those are separate later gates. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data science do not make the function irrelevant. Use irrelevant only when supplied responsibilities clearly show a predominantly unrelated function such as software implementation, pure data-engineering IC delivery, IT support, sales, legal, or clinical work. Use uncertain for incomplete, mixed, or plausibly transferable descriptions. Before returning irrelevant, explicitly test whether at least two demonstrated areas transfer; if they do, return uncertain or relevant. Always return a concrete scopeSummary based on the primary responsibilities. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.\n\nJobs:\n${JSON.stringify(batch.map((job) => ({ sourceId: job.sourceId, title: job.title, company: job.company, location: job.location, description: job.description.slice(0, 5000) })), null, 2)}\n\nReturn {"jobs":[{"sourceId":"...","evaluation":{"roleFamilyId":"...","relevance":"relevant|uncertain|irrelevant","confidence":0.0,"scopeSummary":"...","codingIntensity":"low|medium|high|unknown","seniority":"too_junior|aligned|stretch|unknown","reasons":[],"unknowns":[]}}]}`,
     },
   ];
 }
@@ -500,11 +566,12 @@ async function triageJobs(jobs, runId) {
     }
     const bySource = new Map(response.result.jobs.map((item) => [item.sourceId, item.evaluation]));
     for (const job of batch) {
-      const evaluation = bySource.get(job.sourceId);
-      if (!evaluation) {
+      const rawEvaluation = bySource.get(job.sourceId);
+      if (!rawEvaluation) {
         results.push(await upsertJob({ ...job, status: "triage_pending", details: { ...job.details, triageStatus: "missing_result" } }));
         continue;
       }
+      const evaluation = applyHighRecallTriageSafety(job, rawEvaluation);
       const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.95;
       const status = reject ? "triage_rejected" : "deep_review_pending";
       const updated = await upsertJob({
@@ -1018,8 +1085,9 @@ export async function runLocalTriageEvaluation({ jobId, runId = null }) {
     stage: "triage", messages: triageMessages([job]), schema: triageBatchSchema,
     runId, operation: "local_triage", maxTokens: 1400,
   });
-  const evaluation = response.result?.jobs?.find((item) => item.sourceId === job.sourceId)?.evaluation;
-  if (!evaluation) throw new Error(`Local triage failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
+  const rawEvaluation = response.result?.jobs?.find((item) => item.sourceId === job.sourceId)?.evaluation;
+  if (!rawEvaluation) throw new Error(`Local triage failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
+  const evaluation = applyHighRecallTriageSafety(job, rawEvaluation);
   const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.95;
   const updated = await upsertJob({
     ...job,
@@ -1163,7 +1231,7 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
   let updated;
 
   if (task.taskType === "triage") {
-    const evaluation = parsed.triage;
+    const evaluation = applyHighRecallTriageSafety(job, parsed.triage);
     const reject = evaluation.relevance === "irrelevant" && evaluation.confidence >= 0.95;
     await recordEvaluation({
       ...evaluationBase,

@@ -46,6 +46,12 @@ test("specialist target roles do not require a management word", () => {
   }
 });
 
+test("qualified technical product titles enter the candidate lane without admitting product marketing", () => {
+  assert.equal(classifyCandidateTitle("Senior Staff Technical Product Manager-Service Intelligence").eligible, true);
+  assert.equal(classifyCandidateTitle("Director, Platform Product Manager - Decisioning").eligible, true);
+  assert.equal(classifyCandidateTitle("Senior Product Marketing Manager").eligible, false);
+});
+
 test("candidate routing implements function-and-seniority, specialist, and multi-function lanes", () => {
   assert.equal(classifyCandidateTitle("Senior Analytics Manager").lane, "function_and_seniority");
   assert.equal(classifyCandidateTitle("Product Scientist").lane, "specialist_exception");

@@ -50,6 +50,50 @@ test.after(async () => {
   await rm(tempDir, { recursive: true, force: true });
 });
 
+test("high-recall triage safety sends a rejected decision-intelligence product role to deep review", () => {
+  const evaluation = workflow.applyHighRecallTriageSafety({
+    title: "Senior Staff Technical Product Manager-Service Intelligence",
+    description: "Lead product strategy and product development for a 0-to-1 decision intelligence platform. Define data models and decision logic, partner cross-functionally with Data Analytics and AI/ML teams, and build foundational capabilities.",
+  }, {
+    roleFamilyId: "exploratory",
+    relevance: "irrelevant",
+    confidence: 0.99,
+    scopeSummary: "No scope summary returned.",
+    codingIntensity: "unknown",
+    seniority: "aligned",
+    reasons: [],
+    unknowns: [],
+  });
+
+  assert.equal(evaluation.relevance, "uncertain");
+  assert.equal(evaluation.roleFamilyId, "ai_product_platform");
+  assert.equal(evaluation.safetyOverride.originalRelevance, "irrelevant");
+  assert.ok(evaluation.safetyOverride.matchedSignals.length >= 3);
+  assert.notEqual(evaluation.scopeSummary, "No scope summary returned.");
+});
+
+test("high-recall triage safety preserves clear unrelated and low-scope rejections", () => {
+  const irrelevant = {
+    roleFamilyId: "exploratory",
+    relevance: "irrelevant",
+    confidence: 0.99,
+    scopeSummary: "Unrelated delivery work.",
+    reasons: [],
+    unknowns: [],
+  };
+  const software = workflow.applyHighRecallTriageSafety({
+    title: "Senior Backend Software Engineer",
+    description: "Implement APIs, distributed services, and production infrastructure.",
+  }, irrelevant);
+  const tabulation = workflow.applyHighRecallTriageSafety({
+    title: "Data Analyst / Senior Data Analyst",
+    description: "Validate survey data and deliver tabulations using SPSS under internal standards.",
+  }, irrelevant);
+
+  assert.equal(software.relevance, "irrelevant");
+  assert.equal(tabulation.relevance, "irrelevant");
+});
+
 async function sessionContextFor(user) {
   const [workspace] = await workspaces.listWorkspaces(user.id);
   const session = await auth.createSession(user.id, workspace.id);

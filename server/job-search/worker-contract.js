@@ -130,6 +130,7 @@ function fitPacketToBudget(packet) {
 
 export function buildWorkerPacket({ task, job, feedbackExamples = [] }) {
   if (!task?.id || !job?.id) throw new Error("A task and job are required to build a worker packet.");
+  const usesCurrentEvaluation = ["critic", "outreach"].includes(task.taskType);
   const researchEvidence = (job.details?.research?.results || []).map((item) => ({
     claimType: "web_search_snippet",
     value: item.title || item.description,
@@ -141,7 +142,7 @@ export function buildWorkerPacket({ task, job, feedbackExamples = [] }) {
   }));
   const evidence = uniqueEvidence([
     ...(job.details?.sourceEvidence || []),
-    ...(job.details?.claims || []),
+    ...(usesCurrentEvaluation ? job.details?.claims || [] : []),
     ...researchEvidence,
   ]);
   return fitPacketToBudget({
@@ -176,9 +177,11 @@ export function buildWorkerPacket({ task, job, feedbackExamples = [] }) {
       url: compactString(job.canonicalUrl, 2000),
       description: compactString(job.description, WORKER_LIMITS.maxDescriptionCharacters),
       postedAt: job.postedAt || null,
-      roleFamilyId: job.roleFamilyId || "exploratory",
-      ...(["critic", "outreach"].includes(task.taskType)
-        ? { deepEvaluation: job.details?.deepEvaluation || null }
+      ...(usesCurrentEvaluation
+        ? {
+          roleFamilyId: job.roleFamilyId || "exploratory",
+          deepEvaluation: job.details?.deepEvaluation || null,
+        }
         : {}),
     },
     evidence,

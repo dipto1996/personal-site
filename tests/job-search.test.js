@@ -806,6 +806,14 @@ test("Windows triage and deep packets exclude stale verdicts while critic receiv
     details: {
       triage: { relevance: "irrelevant", scopeSummary: "STALE TRIAGE VERDICT" },
       deepEvaluation: { verdict: "pass", summary: "STALE DEEP VERDICT" },
+      claims: [{
+        claimType: "stale_model_claim",
+        value: "STALE MODEL CLAIM",
+        sourceUrl: "https://example.com/jobs/packet-isolation",
+        supportingPassage: "STALE MODEL CLAIM",
+        confidence: 0.5,
+        evidenceType: "inferred",
+      }],
     },
   };
   const task = (taskType) => ({
@@ -823,7 +831,12 @@ test("Windows triage and deep packets exclude stale verdicts while critic receiv
   assert.equal(JSON.stringify(triagePacket).includes("STALE DEEP VERDICT"), false);
   assert.equal(JSON.stringify(deepPacket).includes("STALE TRIAGE VERDICT"), false);
   assert.equal(JSON.stringify(deepPacket).includes("STALE DEEP VERDICT"), false);
+  assert.equal(JSON.stringify(deepPacket).includes("STALE MODEL CLAIM"), false);
+  assert.equal("roleFamilyId" in triagePacket.job, false);
+  assert.equal("roleFamilyId" in deepPacket.job, false);
   assert.equal(criticPacket.job.deepEvaluation.summary, "STALE DEEP VERDICT");
+  assert.equal(criticPacket.job.roleFamilyId, "analytics_leadership");
+  assert.equal(JSON.stringify(criticPacket).includes("STALE MODEL CLAIM"), true);
 });
 
 test("maximal Windows worker packet fits the 8192 context budget and retains priority evidence", () => {

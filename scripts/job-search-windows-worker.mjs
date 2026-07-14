@@ -153,6 +153,7 @@ async function startModel() {
       "--parallel", String(WORKER_LIMITS.concurrency),
       "--threads", String(cpuThreads),
       "--n-gpu-layers", String(gpuLayers),
+      ...(gpuLayers === 0 ? ["--device", "none", "--no-kv-offload"] : []),
       "--no-webui",
     ], {
       windowsHide: true,

@@ -207,6 +207,110 @@ test("unrelated search snippets cannot block sponsorship or establish compensati
   assert.equal(result.verdict, "maybe");
 });
 
+test("same-company and same-title research from another location cannot decide hard gates", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director of Product Analytics",
+    company: "Example Analytics",
+    location: "Austin, TX",
+    canonicalUrl: "https://jobs.example.com/director-product-analytics-austin",
+    description: "Lead product analytics and experimentation in Austin.",
+    details: {
+      sourceEvidence: [],
+      claims: [
+        {
+          claimType: "compensation",
+          value: "Base salary is $120,000-$140,000.",
+          supportingPassage: "Example Analytics Director of Product Analytics in Chicago pays $120,000-$140,000.",
+          sourceUrl: "https://jobs.example.com/director-product-analytics-chicago",
+        },
+        {
+          claimType: "visa",
+          value: "No visa sponsorship.",
+          supportingPassage: "The Chicago position does not provide visa sponsorship.",
+          sourceUrl: "https://jobs.example.com/director-product-analytics-chicago",
+        },
+      ],
+      research: { results: [{
+        title: "Example Analytics Director of Product Analytics - Chicago",
+        description: "The Chicago position pays $120,000-$140,000 and does not provide visa sponsorship.",
+        url: "https://jobs.example.com/director-product-analytics-chicago",
+      }] },
+    },
+  }, modelEvaluation({ expertiseFit: dimension(4.5, "Strong product analytics match.") }));
+
+  assert.equal(result.mustHave.workAuthorization.status, "unknown");
+  assert.equal(result.mustHave.compensation.status, "unknown");
+  assert.equal(result.verdict, "maybe");
+});
+
+test("claims without source URLs cannot decide compensation or sponsorship", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director of Product Analytics",
+    company: "Example Analytics",
+    location: "Austin, TX",
+    canonicalUrl: "",
+    description: "Lead product analytics and experimentation.",
+    details: {
+      sourceEvidence: [],
+      claims: [
+        { claimType: "compensation", value: "Base salary is $120,000-$140,000." },
+        { claimType: "visa", value: "No visa sponsorship." },
+      ],
+      research: { results: [] },
+    },
+  }, modelEvaluation({ expertiseFit: dimension(4.5, "Strong product analytics match.") }));
+
+  assert.equal(result.mustHave.workAuthorization.status, "unknown");
+  assert.equal(result.mustHave.compensation.status, "unknown");
+  assert.equal(result.verdict, "maybe");
+});
+
+test("matching-location research can decide posting-specific compensation and sponsorship", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director of Product Analytics",
+    company: "Example Analytics",
+    location: "Austin, TX",
+    canonicalUrl: "https://jobs.example.com/director-product-analytics-austin",
+    description: "Lead product analytics and experimentation in Austin.",
+    details: {
+      sourceEvidence: [],
+      claims: [],
+      research: { results: [{
+        title: "Example Analytics Director of Product Analytics - Austin",
+        description: "The Austin position has a base salary of $120,000-$140,000 and does not provide visa sponsorship.",
+        url: "https://search.example.org/example-analytics-austin-role",
+      }] },
+    },
+  }, modelEvaluation({ expertiseFit: dimension(4.5, "Strong product analytics match.") }));
+
+  assert.equal(result.mustHave.workAuthorization.status, "blocked");
+  assert.equal(result.mustHave.compensation.status, "blocked");
+  assert.equal(result.verdict, "pass");
+});
+
+test("an exact posting URL can decide hard gates without repeating the location", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director of Product Analytics",
+    company: "Example Analytics",
+    location: "New York, NY",
+    canonicalUrl: "https://www.linkedin.com/jobs/view/4437899533/?trackingId=abc",
+    description: "Lead product analytics and experimentation.",
+    details: {
+      sourceEvidence: [],
+      claims: [],
+      research: { results: [{
+        title: "Example Analytics Director of Product Analytics",
+        description: "Base salary is $190,000-$220,000. Visa sponsorship is available for this position.",
+        url: "https://linkedin.com/jobs/view/director-product-analytics-4437899533",
+      }] },
+    },
+  }, modelEvaluation({ expertiseFit: dimension(4.5, "Strong product analytics match.") }));
+
+  assert.equal(result.mustHave.workAuthorization.status, "met");
+  assert.equal(result.mustHave.compensation.status, "met");
+  assert.equal(result.verdict, "maybe");
+});
+
 test("explicit F-1 OPT incompatibility blocks work authorization", () => {
   const result = finalizeDeepEvaluation({
     title: "Analytics Manager",

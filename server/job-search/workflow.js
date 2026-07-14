@@ -609,16 +609,26 @@ async function triageJobs(jobs, runId) {
 }
 
 async function researchJob(job, runId) {
-  const cacheKey = hash("company-role-research-v5", job.company, job.normalizedTitle || job.title);
+  const cacheKey = hash(
+    "company-role-posting-research-v6",
+    job.company,
+    job.normalizedTitle || job.title,
+    job.location,
+    job.canonicalUrl || job.sourceId,
+  );
   const cached = await readResearchCache(cacheKey);
   if (cached) return cached;
   const cleanTitle = String(job.title || "").replace(/[^a-z0-9&,+/() -]+/gi, " ").replace(/\s+/g, " ").trim();
+  const cleanLocation = String(job.location || "").replace(/[^a-z0-9&,+/() -]+/gi, " ").replace(/\s+/g, " ").trim();
+  const locationTerm = cleanLocation && !/^(remote|multiple locations?)$/i.test(cleanLocation)
+    ? ` "${cleanLocation}"`
+    : "";
   const codingRisk = classifyCodingInterviewRisk(job);
   const interviewTerms = ["near_certain", "elevated"].includes(codingRisk.riskLevel)
     ? " OR \"coding interview\" OR \"live coding\" OR \"SQL assessment\" OR \"Python assessment\" OR \"technical screen\" OR \"interview process\""
     : "";
   const queries = [
-    `"${job.company}" "${cleanTitle}" (salary OR compensation OR "pay range" OR sponsorship OR "work authorization"${interviewTerms})`,
+    `"${job.company}" "${cleanTitle}"${locationTerm} (salary OR compensation OR "pay range" OR sponsorship OR "work authorization"${interviewTerms})`,
     `"${job.company}" ("STEM OPT" OR "F-1 OPT" OR "E-Verify" OR H-1B OR LCA) (site:e-verify.gov OR site:dol.gov OR site:uscis.gov OR site:dhs.gov)`,
   ];
   const results = [];

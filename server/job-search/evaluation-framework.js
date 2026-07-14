@@ -6,7 +6,7 @@ import {
   SPONSORSHIP_AVAILABLE_PATTERN,
 } from "./authorization-evidence.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v9";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v10";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 
@@ -173,6 +173,50 @@ function evidenceNamesRole(item, title) {
   return tokens.filter((token) => text.includes(token)).length >= required;
 }
 
+function comparableJobUrl(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    const linkedInId = url.pathname.match(/\/jobs\/view\/(?:[^/]*-)?(\d{8,})\/?$/i)?.[1];
+    const indeedId = url.searchParams.get("jk");
+    if (linkedInId) return `linkedin:${linkedInId}`;
+    if (indeedId) return `indeed:${indeedId}`;
+    return `${host}${url.pathname.replace(/\/$/, "").toLowerCase()}`;
+  } catch {
+    return "";
+  }
+}
+
+function normalizedLocationMarkers(location) {
+  const ignored = new Set(["remote", "hybrid", "onsite", "on site", "united states", "usa", "multiple locations"]);
+  return clean(location).toLowerCase().split(/[,/|;]/)
+    .map((part) => part.replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim())
+    .filter((part) => part.length >= 4 && !ignored.has(part) && !/^[a-z]{2}$/.test(part));
+}
+
+function evidenceMatchesJobPosting(item, job) {
+  const evidenceUrl = comparableJobUrl(item?.sourceUrl);
+  const postingUrl = comparableJobUrl(job?.canonicalUrl);
+  if (evidenceUrl && postingUrl && evidenceUrl === postingUrl) return true;
+  const locationMarkers = normalizedLocationMarkers(job?.location);
+  if (!locationMarkers.length) return false;
+  const text = clean(item?.text).toLowerCase().replace(/[^a-z0-9 ]+/g, " ");
+  return locationMarkers.some((marker) => text.includes(marker));
+}
+
+function claimMatchesJobPosting(claim, job) {
+  const claimUrl = comparableJobUrl(claim?.sourceUrl);
+  const postingUrl = comparableJobUrl(job?.canonicalUrl);
+  if (claimUrl && postingUrl && claimUrl === postingUrl) return true;
+  const matchingResearch = researchEvidence(job).find((item) => (
+    claimUrl && comparableJobUrl(item.sourceUrl) === claimUrl
+  ));
+  return Boolean(matchingResearch
+    && evidenceNamesCompany(matchingResearch, job?.company)
+    && evidenceNamesRole(matchingResearch, job?.title)
+    && evidenceMatchesJobPosting(matchingResearch, job));
+}
+
 function officialEligibilitySource(url) {
   try {
     const host = new URL(url).hostname.toLowerCase();
@@ -189,7 +233,8 @@ function compensationEvidence(job) {
   const structured = clean(job?.details?.sourceMetadata?.compensation);
   const candidates = [
     ...(structured ? [{ text: structured, sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" }] : []),
-    ...relevantClaims(job, /(compensation|salary|base_pay|pay_range)/i),
+    ...relevantClaims(job, /(compensation|salary|base_pay|pay_range)/i)
+      .filter((claim) => claimMatchesJobPosting(claim, job)),
   ];
   const description = clean(job?.description);
   const numericSalaryRange = description.match(/\b(?:total (?:annual )?compensation|total rewards?|on-target earnings|OTE|salary|compensation|base pay|pay range|pays?|hourly rate|wage)\b[^$]{0,100}(?:USD\s*)?\$\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?\s*(?:-|–|—|to)\s*(?:USD\s*)?\$?\s?\d{2,6}(?:,\d{3})*(?:\.\d+)?[kK]?(?:\s*(?:per|\/|a)?\s*(?:hour|hr|year|yr|annum|annually))?(?:[^.!?]{0,100}\b(?:including|includes)\b[^.!?]{0,80}\b(?:bonus|equity|stock|commission)\b)?/i)?.[0];
@@ -199,6 +244,7 @@ function compensationEvidence(job) {
   candidates.push(...researchEvidence(job).filter((item) => (
     evidenceNamesCompany(item, job?.company)
       && evidenceNamesRole(item, job?.title)
+      && evidenceMatchesJobPosting(item, job)
       && /base salary|salary range|base pay|pay range|\$\s*\d/i.test(item.text)
   )));
   for (const candidate of candidates) {
@@ -213,10 +259,12 @@ function authorizationEvidence(job) {
   const claims = relevantClaims(job, /(visa|sponsor|work_authorization|immigration|citizenship|clearance|h1b|opt|everify)/i);
   const research = [...employerEvidence(job), ...researchEvidence(job)];
   const jobClaims = claims.filter((item) => !officialEligibilitySource(item.sourceUrl)
-    && !/employer|history|e-?verify|lca/i.test(item.claimType || ""));
+    && !/employer|history|e-?verify|lca/i.test(item.claimType || "")
+    && claimMatchesJobPosting(item, job));
   const roleSpecificResearch = research.filter((item) => !officialEligibilitySource(item.sourceUrl)
     && evidenceNamesCompany(item, job?.company)
-    && evidenceNamesRole(item, job?.title));
+    && evidenceNamesRole(item, job?.title)
+    && evidenceMatchesJobPosting(item, job));
   const jobLevelEvidence = [posting, ...jobClaims, ...roleSpecificResearch];
   const blocked = jobLevelEvidence.find((item) => (
     BLOCKED_SPONSORSHIP.test(item.text) || CITIZENSHIP_BLOCK.test(item.text) || hasOptCptIncompatibilityEvidence(item.text)

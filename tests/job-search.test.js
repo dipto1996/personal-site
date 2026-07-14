@@ -879,13 +879,16 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(setupScript, /cpuThreads = 2/);
   assert.match(setupScript, /activeMinutes = 120/);
   assert.match(setupScript, /cooldownMinutes = 60/);
+  assert.match(setupScript, /temperatureCooldownMinutes = 15/);
   assert.match(startScript, /JOBSEARCH_LOCAL_GPU_LAYERS/);
   assert.match(startScript, /JOBSEARCH_WORKER_ACTIVE_MINUTES/);
+  assert.match(startScript, /JOBSEARCH_WORKER_TEMPERATURE_COOLDOWN_MINUTES/);
   assert.match(workerScript, /JOBSEARCH_LOCAL_GPU_LAYERS \|\| 8/);
   assert.match(workerScript, /scheduled_two_hour_limit/);
   assert.match(workerScript, /pass\.thinking \? "think" : "no_think"/);
   assert.match(workerScript, /resource_wait_before_claim/);
   assert.match(workerScript, /beginCooldown\("temperature_guard"\)/);
+  assert.match(workerScript, /cooldownDurationForReason/);
   assert.match(workerScript, /AbortSignal\.any/);
   assert.ok(workerScript.indexOf("resourcesReadyBeforeClaim()") < workerScript.indexOf('workerFetch("claim"'));
 });
@@ -956,6 +959,14 @@ test("Windows worker circuit breaker distinguishes task output from infrastructu
   assert.deepEqual(cooling, { phase: "cooldown", until: 3_601_000 });
   const resumed = windowsWorkerRuntime.resolveThermalCycleState({ phase: "cooldown", until: new Date(500).toISOString() }, { now: 1_000, activeMs: 7_200_000, cooldownMs: 3_600_000 });
   assert.deepEqual(resumed, { phase: "active", until: 7_201_000 });
+  assert.equal(windowsWorkerRuntime.cooldownDurationForReason("temperature_guard", {
+    scheduledMs: 3_600_000,
+    temperatureMs: 900_000,
+  }), 900_000);
+  assert.equal(windowsWorkerRuntime.cooldownDurationForReason("scheduled_two_hour_limit", {
+    scheduledMs: 3_600_000,
+    temperatureMs: 900_000,
+  }), 3_600_000);
 });
 
 test("ATS detector recognizes Greenhouse, Lever, Ashby, Workday, and SmartRecruiters", () => {

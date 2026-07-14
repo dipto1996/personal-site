@@ -20,6 +20,13 @@ export function resolveThermalCycleState(state, {
   return { phase: "active", until: now + activeMs };
 }
 
+export function cooldownDurationForReason(reason, {
+  scheduledMs = 60 * 60_000,
+  temperatureMs = 15 * 60_000,
+} = {}) {
+  return reason === "temperature_guard" ? temperatureMs : scheduledMs;
+}
+
 export function isInfrastructureWorkerFailure(error) {
   return workerFailureCategory(error) === "infrastructure";
 }

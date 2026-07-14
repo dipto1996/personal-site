@@ -11,7 +11,7 @@ import { z } from "zod";
 import { assertApprovedWindowsModel, assertResourcesSafe } from "./job-search-windows-resource-guard.mjs";
 import { getWorkerPass, getWorkerPasses, REQUIRED_WORKER_VERSION, WORKER_LIMITS, workerResultId } from "../server/job-search/worker-contract.js";
 import { parseStructuredContent } from "../server/job-search/schemas.js";
-import { resolveThermalCycleState, shouldRetryWorkerTask, workerFailureCategory } from "../server/job-search/windows-worker-runtime.js";
+import { cooldownDurationForReason, resolveThermalCycleState, shouldRetryWorkerTask, workerFailureCategory } from "../server/job-search/windows-worker-runtime.js";
 
 const args = new Set(process.argv.slice(2));
 const valueArg = (name, fallback) => {
@@ -24,6 +24,7 @@ const maxTasks = Math.max(0, Number(valueArg("--max-tasks", once ? "1" : "0")) |
 const pollMs = Math.max(5_000, Number(valueArg("--poll-ms", "15000")) || 15_000);
 const activeMinutes = Math.max(1, Number(valueArg("--active-minutes", process.env.JOBSEARCH_WORKER_ACTIVE_MINUTES || "120")) || 120);
 const cooldownMinutes = Math.max(1, Number(valueArg("--cooldown-minutes", process.env.JOBSEARCH_WORKER_COOLDOWN_MINUTES || "60")) || 60);
+const temperatureCooldownMinutes = Math.max(5, Number(valueArg("--temperature-cooldown-minutes", process.env.JOBSEARCH_WORKER_TEMPERATURE_COOLDOWN_MINUTES || "15")) || 15);
 const endpoint = String(process.env.JOBSEARCH_WORKER_BASE_URL || "").replace(/\/$/, "");
 const token = String(process.env.JOBSEARCH_WORKER_TOKEN || "");
 const workerId = String(process.env.JOBSEARCH_WORKER_ID || `${os.hostname().toLowerCase()}:${process.pid}`).replace(/[^a-z0-9_.:-]/gi, "-");
@@ -56,6 +57,7 @@ function sleep(ms) {
 
 const activeMs = activeMinutes * 60_000;
 const cooldownMs = cooldownMinutes * 60_000;
+const temperatureCooldownMs = temperatureCooldownMinutes * 60_000;
 
 async function readThermalState() {
   try {
@@ -75,6 +77,7 @@ async function persistThermalState() {
     until: new Date(thermalState.until).toISOString(),
     activeMinutes,
     cooldownMinutes,
+    temperatureCooldownMinutes,
     updatedAt: new Date().toISOString(),
   }, null, 2));
 }
@@ -87,10 +90,15 @@ async function beginActiveWindow() {
 
 async function beginCooldown(reason) {
   if (thermalState.phase === "cooldown" && thermalState.until > Date.now()) return;
-  thermalState = { phase: "cooldown", until: Date.now() + cooldownMs };
+  const durationMinutes = reason === "temperature_guard" ? temperatureCooldownMinutes : cooldownMinutes;
+  const durationMs = cooldownDurationForReason(reason, {
+    scheduledMs: cooldownMs,
+    temperatureMs: temperatureCooldownMs,
+  });
+  thermalState = { phase: "cooldown", until: Date.now() + durationMs };
   await persistThermalState();
   await stopModel(reason);
-  log("thermal_cooldown_started", { reason, cooldownMinutes, cooldownUntil: new Date(thermalState.until).toISOString() });
+  log("thermal_cooldown_started", { reason, cooldownMinutes: durationMinutes, cooldownUntil: new Date(thermalState.until).toISOString() });
 }
 
 async function workerFetch(pathname, { method = "GET", body, timeoutMs = 30_000 } = {}) {
@@ -404,6 +412,7 @@ log("worker_started", {
   cpuThreads,
   activeMinutes,
   cooldownMinutes,
+  temperatureCooldownMinutes,
   thermalPhase: thermalState.phase,
   thermalUntil: new Date(thermalState.until).toISOString(),
 });

@@ -49,6 +49,7 @@ $config = [ordered]@{
   idleShutdownSeconds = 300
   activeMinutes = 120
   cooldownMinutes = 60
+  temperatureCooldownMinutes = 15
   configuredAt = (Get-Date).ToUniversalTime().ToString('o')
 }
 $config | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:WorkerConfigPath -Encoding utf8
@@ -72,6 +73,7 @@ if ($RegisterScheduledTask -and -not $SkipScheduledTask) {
   concurrency = $config.concurrency
   activeMinutes = $config.activeMinutes
   cooldownMinutes = $config.cooldownMinutes
+  temperatureCooldownMinutes = $config.temperatureCooldownMinutes
   credentialProtection = 'Windows DPAPI, current user'
   scheduledTask = ($RegisterScheduledTask -and -not $SkipScheduledTask)
   publicListener = $false

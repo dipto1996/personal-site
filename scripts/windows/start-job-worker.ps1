@@ -32,6 +32,7 @@ $env:JOBSEARCH_LOCAL_GPU_LAYERS = if ($null -ne $config.gpuLayers) { [string][Ma
 $env:JOBSEARCH_LOCAL_CPU_THREADS = if ($null -ne $config.cpuThreads) { [string]$config.cpuThreads } else { '2' }
 $env:JOBSEARCH_WORKER_ACTIVE_MINUTES = if ($null -ne $config.activeMinutes) { [string]$config.activeMinutes } else { '120' }
 $env:JOBSEARCH_WORKER_COOLDOWN_MINUTES = if ($null -ne $config.cooldownMinutes) { [string]$config.cooldownMinutes } else { '60' }
+$env:JOBSEARCH_WORKER_TEMPERATURE_COOLDOWN_MINUTES = if ($null -ne $config.temperatureCooldownMinutes) { [string]$config.temperatureCooldownMinutes } else { '15' }
 
 $workerArgs = @("`"$($config.workerScript)`"")
 if ($Once) { $workerArgs += '--once' }

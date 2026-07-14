@@ -53,6 +53,8 @@ import {
   writeResearchCache,
 } from "./repository.js";
 import {
+  cloudDeepEvaluationSchema,
+  cloudEvidenceExtractionSchema,
   criticSchema,
   deepEvaluationSchema,
   outreachSchema,
@@ -71,7 +73,7 @@ import { normalizeTimestampInput } from "./utils.js";
 import { rotatingWatchlistCompanies } from "./watchlist.js";
 import { parseWorkerOutput } from "./worker-contract.js";
 
-export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v11";
+export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v13";
 
 const INTERVIEW_RISK_INSTRUCTIONS = "Infer interview risk from the role archetype as well as explicit evidence: engineering and coding-bound data/applied/research-scientist IC roles are near-certain coding risks unless role-specific contrary evidence exists; product/decision scientists, data-science management, and hands-on technical leadership have elevated but unconfirmed risk; analytics/strategy leadership is generally lower risk but remains unverified. Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work do not alone prove a coding round.";
 
@@ -751,22 +753,49 @@ export async function prepareWindowsDeepJob({ jobId, runId = null }) {
   return job;
 }
 
-function deepMessages(job, research, examples) {
-  const compactResearch = (research?.results || []).slice(0, 10).map((item) => ({
+function deepEvidenceMessages(job, research) {
+  const compactResearch = (research?.results || []).slice(0, 6).map((item) => ({
     title: item.title,
     url: item.url,
-    description: String(item.description || "").slice(0, 700),
+    description: String(item.description || "").slice(0, 400),
     age: item.age || "",
-    query: item.query || "",
   }));
   return [
     {
       role: "system",
-      content: "You are a rigorous career strategist. Return JSON only. Ground every material fact in supplied evidence. Unknown must remain unknown.",
+      content: "Extract only evidence supplied in the job posting or web snippets. Return JSON only. Unknown facts must remain unknown.",
     },
     {
       role: "user",
-      content: `Candidate:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nEvaluation policy:\n${JSON.stringify(TARGET_PROFILE.evaluationPolicy, null, 2)}\n\nFour must-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nTarget geography: ${TARGET_PROFILE.targetGeography}\nCompensation: ${TARGET_PROFILE.compensation}\nWork authorization: ${TARGET_PROFILE.workAuthorization}\nAvoid: ${TARGET_PROFILE.avoid}\nRanking weights: ${JSON.stringify(TARGET_PROFILE.rankingWeights)}\n\nJob:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 12000), structuredCompensation: job.details?.sourceMetadata?.compensation || "" }, null, 2)}\n\nWeb evidence:\n${JSON.stringify(compactResearch, null, 2)}\n\nPrior owner feedback in this role family:\n${JSON.stringify(examples.slice(0, 8), null, 2)}\n\nIndependently evaluate the job from responsibilities and evidence; do not inherit triage as truth. First evaluate demonstrated expertise fit, work authorization, annual base compensation, and coding-interview safety. blocked requires supported incompatibility, unknown means missing or ambiguous evidence, and met requires support. Expertise fit is responsibility fit: 5 is direct across several demonstrated core areas, 4 is strong in a major core area, 3 is partial but substantive transferable fit, 2 is weak adjacency, and 0-1 is clearly unrelated. Never lower expertiseFit or leadershipScope because of public-sector or different-industry context, lack of AI or financial-services content, US onsite/hybrid work, lack of remote-from-India flexibility, or missing gate evidence. Score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null and evidenceStatus=unknown for missing evidence; unknown is never 0. Compensation means annual base or guaranteed cash, not total compensation. interviewVelocity means documented process speed only; companyQuality requires supplied evidence. ${INTERVIEW_RISK_INSTRUCTIONS} A primarily engineering-implementation role is an expertise blocker. Missing compensation, visa, or interview evidence produces unknown and maybe, never pass. F-1/OPT/CPT compatibility alone does not establish future sponsorship, so keep work authorization unknown unless sponsorship is explicitly supported or official employer evidence establishes both E-Verify participation and H-1B/LCA history. Explicit no-current-or-future sponsorship, citizenship/clearance, confirmed annual-base maximum below $170,000, and explicit coding/SQL/Python assessments are blockers. AI/ML, financial-services overlap, remote flexibility, seniority, company quality, and interview velocity are bonuses after the four must-haves. Return a model recommendation; deterministic evidence gates and weights produce the final verdict. Cite every explicit or inferred claim, omit unsupported claims, and preserve unknowns.`
+      content: `Job:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 7500), structuredCompensation: job.details?.sourceMetadata?.compensation || "" })}\n\nWeb snippets:\n${JSON.stringify(compactResearch)}\n\nReturn at most six material claims. Prioritize responsibility fit, job-level work-authorization restrictions, annual base compensation, and explicit interview stages. Each explicit or inferred claim requires a supplied source URL and a verbatim supporting passage under 240 characters. Employer sponsorship history is not job-level sponsorship. Missing facts belong in unknowns.`,
+    },
+  ];
+}
+
+function compactFeedbackExamples(examples) {
+  return examples.slice(0, 4).map((example) => ({
+    title: String(example.title || "").slice(0, 180),
+    company: String(example.company || "").slice(0, 180),
+    disposition: example.disposition || "",
+    reasons: Array.isArray(example.reasons) ? example.reasons.slice(0, 4) : [],
+    note: String(example.note || "").slice(0, 240),
+  }));
+}
+
+function deepMessages(job, research, examples, extraction = {}) {
+  const compactResearch = (research?.results || []).slice(0, 4).map((item) => ({
+    title: String(item.title || "").slice(0, 220),
+    url: item.url,
+    description: String(item.description || "").slice(0, 320),
+  }));
+  return [
+    {
+      role: "system",
+      content: "You are a rigorous career strategist. Return one compact JSON object only. Ground facts in supplied evidence. Unknown must remain unknown. Keep every reason under 35 words.",
+    },
+    {
+      role: "user",
+      content: `Candidate:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise)}\n\nDifferentiators only:\n${JSON.stringify(TARGET_PROFILE.differentiators)}\n\nFour must-haves:\n${JSON.stringify(TARGET_PROFILE.hardRequirements)}\n\nWeights: ${JSON.stringify(TARGET_PROFILE.rankingWeights)}\n\nJob:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 6500), structuredCompensation: job.details?.sourceMetadata?.compensation || "" })}\n\nExtracted evidence:\n${JSON.stringify(extraction)}\n\nAdditional web snippets:\n${JSON.stringify(compactResearch)}\n\nOwner examples:\n${JSON.stringify(compactFeedbackExamples(examples))}\n\nEvaluate from responsibilities, not title or triage. The supplied candidate profile and job posting are the evidence for expertiseFit and leadershipScope: when the posting contains substantive duties, score those dimensions and use evidenceStatus=inferred; never call them unknown merely because no external source links the candidate to the role. Expertise fit: 5 requires direct alignment across several demonstrated areas with no material mandatory-experience gap; 4 is strong alignment with only minor gaps; 3 is substantive transferable alignment but the posting names one or more material mandatory domain, data, method, or tool gaps; 2 is weak adjacency or several severe mandatory gaps; 0-1 is unrelated. Industry or public-sector context alone is never a penalty, but explicit requirements such as several years of healthcare claims, specialized clinical coding, or another domain capability absent from the résumé are real fit gaps and must reduce the score without erasing transferable analytics fit. Never lower expertise or leadership for missing AI/finance content, onsite work, or missing salary/visa/interview evidence. Use score=null and evidenceStatus=unknown only for facts the supplied material truly does not establish; unknown is never 0. ${INTERVIEW_RISK_INSTRUCTIONS} Missing compensation, sponsorship, or interview evidence means unknown and maybe, not pass. Annual base below $170k, explicit no-current/future sponsorship, citizenship/clearance, and explicit coding/SQL/Python assessments are blockers. F-1/OPT/CPT compatibility alone does not prove future sponsorship. Employer history must not override a job-level restriction. Engineering implementation is an expertise blocker. AI/ML, finance, remote work, seniority, company quality, and interview speed are bonuses only. Return all ten dimensions and all four mustHave gates. verdict is a model recommendation; the server recomputes gates, score, and final verdict. Keep external factual claims to supplied evidence and preserve unknowns.`,
     },
   ];
 }
@@ -790,20 +819,35 @@ async function deepEvaluateJobs(jobs, runId) {
   for (const job of candidates) {
     const research = await researchJob(job, runId);
     const examples = await listFeedbackExamples(job.roleFamilyId);
+    const extractionResponse = await callUtilityModel({
+      messages: deepEvidenceMessages(job, research), schema: cloudEvidenceExtractionSchema,
+      runId, operation: "deep_evidence_extract", maxTokens: 900,
+    });
+    const extraction = extractionResponse.result || { claims: [], unknowns: [] };
     const response = await callDeepModel({
-      messages: deepMessages(job, research, examples), schema: deepEvaluationSchema,
-      runId, operation: "deep_fit", maxTokens: 3500,
+      messages: deepMessages(job, research, examples, extraction), schema: cloudDeepEvaluationSchema,
+      runId, operation: "deep_fit", maxTokens: 1200,
     });
     if (!response.result) {
       evaluated.push(await upsertJob({
         ...job,
         status: "deep_review_pending",
-        details: { ...job.details, deepStatus: response.status, deepAttempts: response.attempts || [], research },
+        details: {
+          ...job.details,
+          deepStatus: response.status,
+          deepAttempts: response.attempts || [],
+          evidenceExtractionStatus: extractionResponse.status,
+          evidenceExtractionAttempts: extractionResponse.attempts || [],
+          research,
+        },
       }));
       continue;
     }
-    const currentClaims = dedupeClaims(response.result.claims || []);
-    const finalized = finalizeDeepEvaluation(withCurrentEvaluationClaims(job, currentClaims), response.result);
+    const currentClaims = dedupeClaims([...(extraction.claims || []), ...(response.result.claims || [])]);
+    const finalized = finalizeDeepEvaluation(
+      withCurrentEvaluationClaims(job, currentClaims),
+      { ...response.result, claims: currentClaims },
+    );
     const evaluation = await recordEvaluation({
       jobId: job.id, runId, stage: "deep", provider: response.provider, model: response.model,
       promptVersion: PROMPT_VERSION, verdict: finalized.verdict, score: finalized.overallScore,
@@ -821,7 +865,10 @@ async function deepEvaluateJobs(jobs, runId) {
       details: {
         ...job.details, deepEvaluation: finalized, deepStatus: "complete", deepPromptVersion: PROMPT_VERSION,
         evaluationFrameworkVersion: EVALUATION_FRAMEWORK_VERSION,
-        deepProvider: response.provider, deepModel: response.model, deepAttempts: response.attempts || [], research, claims,
+        deepProvider: response.provider, deepModel: response.model, deepAttempts: response.attempts || [],
+        evidenceExtractionStatus: extractionResponse.status,
+        evidenceExtractionAttempts: extractionResponse.attempts || [],
+        research, claims,
         contactCandidates: research.contactCandidates || [],
       },
     }));
@@ -848,8 +895,15 @@ function criticMessages(job) {
   }));
   return [
     { role: "system", content: "Act as an independent evaluation auditor. Return JSON only and use only supplied evidence. Look equally for false rejection and false optimism; do not preserve agreement for its own sake." },
-    { role: "user", content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nEvaluation policy:\n${JSON.stringify(TARGET_PROFILE.evaluationPolicy, null, 2)}\n\nMust-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nJob and primary evaluation:\n${JSON.stringify({ title: job.title, company: job.company, description: job.description.slice(0, 8000), primary: job.details?.deepEvaluation, evidence }, null, 2)}\n\nReconstruct the decision from scratch. Challenge responsibility-fit reasoning, unsupported gates, score/reason contradictions, annual-base versus total-compensation mistakes, unrelated-company or unrelated-role research, hidden coding-interview risk, and work-authorization evidence. Public-sector or different-industry context can still be a strong expertise match. Lack of AI, financial-services overlap, remote work, or prestige cannot reduce core fit. Missing evidence cannot become score 0, met, or blocked. F-1/OPT/CPT acceptance alone cannot establish future sponsorship. Engineering and coding-bound scientist IC roles are near-certain coding risks absent contrary role-specific evidence; product/decision science and data-science management are elevated but not automatically blocked. A pass requires a supported blocker; unknown gates without a blocker require maybe. Return agrees, recommendedVerdict, confidence, objections, unsupportedClaims, and summary under 100 words. Put every material anomaly and its corrected gate or dimension in objections.` },
+    { role: "user", content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nEvaluation policy:\n${JSON.stringify(TARGET_PROFILE.evaluationPolicy, null, 2)}\n\nMust-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nJob and primary evaluation:\n${JSON.stringify({ title: job.title, company: job.company, description: job.description.slice(0, 8000), primary: job.details?.deepEvaluation, evidence }, null, 2)}\n\nReconstruct the decision from scratch. Challenge responsibility-fit reasoning, unsupported gates, score/reason contradictions, annual-base versus total-compensation mistakes, unrelated-company or unrelated-role research, hidden coding-interview risk, and work-authorization evidence. Public-sector or different-industry context can still be a strong expertise match. Industry alone is not a penalty, but explicit mandatory domain, data, method, or tool requirements absent from the résumé are real fit gaps. Lack of AI, financial-services overlap, remote work, or prestige cannot reduce core fit. Missing evidence cannot become score 0, met, or blocked. F-1/OPT/CPT acceptance alone cannot establish future sponsorship. Engineering and coding-bound scientist IC roles are near-certain coding risks absent contrary role-specific evidence; product/decision science and data-science management are elevated but not automatically blocked. An inferred coding-archetype score may coexist with an unknown interview gate and is not itself a contradiction. The server intentionally recomputes final overallScore and verdict; differences from modelOverallScore or modelVerdict are not anomalies by themselves. A pass requires a supported blocker; unknown gates without a blocker require maybe. Return agrees, recommendedVerdict, confidence, objections, unsupportedClaims, and summary under 100 words. Put every material anomaly and its corrected gate or dimension in objections.` },
   ];
+}
+
+export function normalizeCriticAgreement(result, primaryVerdict) {
+  return {
+    ...result,
+    agrees: Boolean(primaryVerdict) && result?.recommendedVerdict === primaryVerdict,
+  };
 }
 
 async function criticJobs(jobs, runId) {
@@ -868,13 +922,14 @@ async function criticJobs(jobs, runId) {
       }));
       continue;
     }
+    const primaryVerdict = job.details?.deepEvaluation?.verdict;
+    const criticResult = normalizeCriticAgreement(response.result, primaryVerdict);
     await recordEvaluation({
       jobId: job.id, runId, stage: "critic", provider: response.provider, model: response.model,
-      promptVersion: PROMPT_VERSION, verdict: response.result.recommendedVerdict,
-      score: response.result.confidence * 100, output: response.result, usage: response.usage,
+      promptVersion: PROMPT_VERSION, verdict: criticResult.recommendedVerdict,
+      score: criticResult.confidence * 100, output: criticResult, usage: response.usage,
     });
-    const primaryVerdict = job.details?.deepEvaluation?.verdict;
-    const disagreement = !response.result.agrees || response.result.recommendedVerdict !== primaryVerdict;
+    const disagreement = !criticResult.agrees;
     const hardBlocked = (job.details?.deepEvaluation?.decision?.blockers || []).length > 0;
     reviewed.push(await upsertJob({
       ...job,
@@ -884,7 +939,7 @@ async function criticJobs(jobs, runId) {
           : primaryVerdict === "pass" ? "passed" : "needs_review",
       details: {
         ...job.details,
-        critic: response.result,
+        critic: criticResult,
         criticStatus: "complete",
         criticPromptVersion: PROMPT_VERSION,
         criticProvider: response.provider,
@@ -1170,13 +1225,14 @@ export async function runLocalCriticEvaluation({ jobId, runId = null }) {
     runId, operation: "local_critic", maxTokens: 1200,
   });
   if (!response.result) throw new Error(`Local critic failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
+  const primaryVerdict = job.details.deepEvaluation.verdict;
+  const criticResult = normalizeCriticAgreement(response.result, primaryVerdict);
   await recordEvaluation({
     jobId: job.id, runId, stage: "critic", provider: response.provider, model: response.model,
-    promptVersion: PROMPT_VERSION, verdict: response.result.recommendedVerdict,
-    score: response.result.confidence * 100, output: response.result, usage: response.usage,
+    promptVersion: PROMPT_VERSION, verdict: criticResult.recommendedVerdict,
+    score: criticResult.confidence * 100, output: criticResult, usage: response.usage,
   });
-  const primaryVerdict = job.details.deepEvaluation.verdict;
-  const disagreement = !response.result.agrees || response.result.recommendedVerdict !== primaryVerdict;
+  const disagreement = !criticResult.agrees;
   const hardBlocked = (job.details.deepEvaluation?.decision?.blockers || []).length > 0;
   const calibration = await getCalibrationStatus();
   return upsertJob({
@@ -1186,7 +1242,7 @@ export async function runLocalCriticEvaluation({ jobId, runId = null }) {
       : primaryVerdict === "apply" && calibration.active ? "shortlisted"
         : primaryVerdict === "pass" ? "passed" : "needs_review",
     details: {
-      ...job.details, critic: response.result, criticStatus: "complete", criticPromptVersion: PROMPT_VERSION,
+      ...job.details, critic: criticResult, criticStatus: "complete", criticPromptVersion: PROMPT_VERSION,
       criticProvider: response.provider, criticModel: response.model,
       criticAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
       modelAgreement: disagreement ? "disagree" : "agree",
@@ -1328,10 +1384,7 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
     });
   } else if (task.taskType === "critic") {
     if (!job.details?.deepEvaluation) throw new Error(`Job ${job.id} has no deep evaluation to criticise.`);
-    const result = parsed.critic;
-    if (result.agrees !== (result.recommendedVerdict === job.details.deepEvaluation.verdict)) {
-      throw new Error("Critic agreement is inconsistent with its recommended verdict.");
-    }
+    const result = normalizeCriticAgreement(parsed.critic, job.details.deepEvaluation.verdict);
     await recordEvaluation({
       ...evaluationBase,
       id: deterministicWorkerEvaluationId(task.taskKey, "critic"),

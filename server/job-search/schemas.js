@@ -6,6 +6,8 @@ const ROLE_FAMILY_IDS = new Set([...TITLE_FAMILIES.map((family) => family.id), "
 const confidenceSchema = z.number().min(0).max(100).transform((value) => (
   value <= 1 ? value : value <= 5 ? value / 5 : value / 100
 ));
+const boundedText = (maximum) => z.string().trim().min(1).transform((value) => value.slice(0, maximum));
+const boundedOptionalText = (maximum) => z.string().trim().transform((value) => value.slice(0, maximum));
 
 export function normalizeRoleFamilyId(value) {
   const normalized = String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
@@ -46,6 +48,20 @@ export const groundedEvidenceSchema = evidenceSchema.superRefine((claim, context
 export const evidenceExtractionSchema = z.object({
   claims: z.array(groundedEvidenceSchema).max(20).default([]),
   unknowns: z.array(z.string().min(1)).max(10).default([]),
+});
+
+const cloudGroundedEvidenceSchema = evidenceSchema.extend({
+  claimType: boundedText(64),
+  value: boundedText(180),
+  sourceUrl: z.string().url(),
+  supportingPassage: boundedText(240),
+  sourceDate: boundedOptionalText(40).default(""),
+  evidenceType: z.enum(["explicit", "inferred"]),
+});
+
+export const cloudEvidenceExtractionSchema = z.object({
+  claims: z.array(cloudGroundedEvidenceSchema).transform((items) => items.slice(0, 6)).default([]),
+  unknowns: z.array(boundedText(180)).transform((items) => items.slice(0, 6)).default([]),
 });
 
 export const triageSchema = z.object({
@@ -109,12 +125,62 @@ export const deepEvaluationSchema = z.object({
   outreachAngle: z.string().default(""),
 });
 
+const cloudDimensionSchema = z.object({
+  score: z.number().min(0).max(5).nullable().default(null),
+  evidenceStatus: z.enum(["explicit", "inferred", "unknown"]).default("unknown"),
+  confidence: confidenceSchema.default(0),
+  reasoning: boundedText(240).default("Evidence not established."),
+});
+
+const cloudMustHaveGateSchema = z.object({
+  status: z.enum(["met", "blocked", "unknown"]),
+  evidenceStatus: z.enum(["explicit", "inferred", "unknown"]).default("unknown"),
+  reasoning: boundedText(260).default("Evidence not established."),
+  sourceUrl: z.string().url().or(z.literal("")).default(""),
+});
+
+export const cloudDeepEvaluationSchema = z.object({
+  verdict: z.enum(["apply", "maybe", "pass"]).default("maybe"),
+  overallScore: z.number().int().min(0).max(100).default(50),
+  summary: boundedText(500).default("Model evaluation completed; deterministic gates decide the final verdict."),
+  dimensions: z.object({
+    expertiseFit: cloudDimensionSchema,
+    workAuthorization: cloudDimensionSchema,
+    compensation: cloudDimensionSchema,
+    codingInterviewSafety: cloudDimensionSchema,
+    leadershipScope: cloudDimensionSchema,
+    companyQuality: cloudDimensionSchema,
+    interviewVelocity: cloudDimensionSchema,
+    aiMlProductAdjacency: cloudDimensionSchema,
+    financialServicesAdvantage: cloudDimensionSchema,
+    remoteFlexibility: cloudDimensionSchema,
+  }),
+  mustHave: z.object({
+    expertiseFit: cloudMustHaveGateSchema,
+    workAuthorization: cloudMustHaveGateSchema,
+    compensation: cloudMustHaveGateSchema,
+    codingInterview: cloudMustHaveGateSchema,
+  }),
+  claims: z.array(cloudGroundedEvidenceSchema).transform((items) => items.slice(0, 6)).default([]),
+  redFlags: z.array(boundedText(180)).transform((items) => items.slice(0, 6)).default([]),
+  greenFlags: z.array(boundedText(180)).transform((items) => items.slice(0, 6)).default([]),
+  unknowns: z.array(boundedText(180)).transform((items) => items.slice(0, 6)).default([]),
+  outreachAngle: boundedOptionalText(320).default(""),
+});
+
+const modelStringListSchema = z.preprocess((value) => {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.values(value).map(String);
+  if (typeof value === "string" && value.trim()) return [value];
+  return [];
+}, z.array(z.string()).transform((items) => items.slice(0, 10)));
+
 export const criticSchema = z.object({
   agrees: z.boolean(),
   recommendedVerdict: z.enum(["apply", "maybe", "pass"]),
   confidence: confidenceSchema,
-  objections: z.array(z.string()).max(10).default([]),
-  unsupportedClaims: z.array(z.string()).max(10).default([]),
+  objections: modelStringListSchema.default([]),
+  unsupportedClaims: modelStringListSchema.default([]),
   summary: z.string().min(1),
 });
 

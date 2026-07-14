@@ -210,8 +210,8 @@ const MODEL_ROUTES = {
   ],
   deep: [
     { provider: "local", model: process.env.JOBSEARCH_LOCAL_LLM_MODEL || "qwen3-4b", format: "json_schema", thinking: true },
-    { provider: "groq", model: "openai/gpt-oss-120b", format: "json_schema", reasoningEffort: "low" },
-    { provider: "cloudflare", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", format: "json_object" },
+    { provider: "groq", model: "openai/gpt-oss-20b", format: "json_schema", reasoningEffort: "low" },
+    { provider: "cloudflare", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", format: "json_schema" },
     { provider: "openrouter", model: "openrouter/free", format: "json_schema" },
     { provider: "zai", model: "glm-5.2", format: "json_object", paid: true },
   ],
@@ -465,7 +465,16 @@ export async function callRoutedModel({ stage, messages, schema, runId, operatio
   const attempts = [];
   for (const route of routes) {
     const response = await callRoute({ route, messages, schema, runId, operation, maxTokens });
-    attempts.push({ provider: response.provider, model: response.model, status: response.status });
+    attempts.push({
+      provider: response.provider,
+      model: response.model,
+      status: response.status,
+      ...(response.error ? {
+        reason: String(response.error)
+          .replace(/(?:sk-|Bearer\s+)[A-Za-z0-9._-]+/gi, "[redacted]")
+          .slice(0, 300),
+      } : {}),
+    });
     if (response.result) return { ...response, attempts };
   }
   return {

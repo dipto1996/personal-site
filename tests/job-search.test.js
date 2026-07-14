@@ -1141,6 +1141,7 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(setupScript, /temperatureCooldownMinutes = 15/);
   assert.match(setupScript, /interPassCooldownSeconds = 90/);
   assert.match(setupScript, /postTaskCooldownSeconds = 180/);
+  assert.match(setupScript, /protocolVersion = 'job-worker-2026-07-v6'/);
   assert.match(startScript, /JOBSEARCH_LOCAL_GPU_LAYERS/);
   assert.match(startScript, /JOBSEARCH_LOCAL_BATCH_THREADS/);
   assert.match(startScript, /JOBSEARCH_WORKER_ACTIVE_MINUTES/);
@@ -1766,6 +1767,7 @@ test("invalid structured output falls through to the next free provider", async 
     });
     assert.equal(response.provider, "groq");
     assert.deepEqual(response.attempts.map((attempt) => attempt.status), ["invalid_response", "live"]);
+    assert.match(response.attempts[0].reason, /JSON object/);
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.GROQ_API_KEY;
@@ -1887,6 +1889,64 @@ test("triage parsing supplies safe defaults for optional model fields", () => {
   assert.equal(parsed.jobs[0].evaluation.codingIntensity, "unknown");
 });
 
+test("cloud deep parsing bounds display text without discarding a usable evaluation", () => {
+  const dimension = {
+    score: 3,
+    evidenceStatus: "inferred",
+    confidence: 0.8,
+    reasoning: "Substantive transferable fit.",
+  };
+  const gate = {
+    status: "unknown",
+    evidenceStatus: "unknown",
+    reasoning: "Evidence is not available.",
+    sourceUrl: "",
+  };
+  const parsed = schemas.cloudDeepEvaluationSchema.parse({
+    verdict: "maybe",
+    overallScore: 64,
+    summary: "x".repeat(700),
+    dimensions: {
+      expertiseFit: dimension,
+      workAuthorization: dimension,
+      compensation: { score: null, evidenceStatus: "unknown", confidence: 0 },
+      codingInterviewSafety: dimension,
+      leadershipScope: dimension,
+      companyQuality: dimension,
+      interviewVelocity: dimension,
+      aiMlProductAdjacency: dimension,
+      financialServicesAdvantage: dimension,
+      remoteFlexibility: dimension,
+    },
+    mustHave: {
+      expertiseFit: gate,
+      workAuthorization: gate,
+      compensation: gate,
+      codingInterview: gate,
+    },
+    claims: [],
+    redFlags: [],
+    greenFlags: [],
+    unknowns: Array.from({ length: 9 }, (_, index) => `Unknown ${index}`),
+    outreachAngle: "",
+  });
+  assert.equal(parsed.summary.length, 500);
+  assert.equal(parsed.unknowns.length, 6);
+  assert.equal(parsed.dimensions.compensation.reasoning, "Evidence not established.");
+});
+
+test("critic agreement is derived from the recommended and primary verdicts", () => {
+  const normalized = workflow.normalizeCriticAgreement({
+    agrees: false,
+    recommendedVerdict: "maybe",
+    confidence: 0.8,
+    objections: [],
+    unsupportedClaims: [],
+    summary: "The review verdict is supported.",
+  }, "maybe");
+  assert.equal(normalized.agrees, true);
+});
+
 test("model confidence accepts fractions, five-point scores, and percentages", () => {
   const base = {
     agrees: true,
@@ -1898,6 +1958,19 @@ test("model confidence accepts fractions, five-point scores, and percentages", (
   assert.equal(schemas.criticSchema.parse({ ...base, confidence: 0.8 }).confidence, 0.8);
   assert.equal(schemas.criticSchema.parse({ ...base, confidence: 4 }).confidence, 0.8);
   assert.equal(schemas.criticSchema.parse({ ...base, confidence: 80 }).confidence, 0.8);
+});
+
+test("critic parsing accepts keyed objection objects from free JSON-mode models", () => {
+  const parsed = schemas.criticSchema.parse({
+    agrees: false,
+    recommendedVerdict: "maybe",
+    confidence: 0.8,
+    objections: { compensation: "Compensation is unknown.", sponsorship: "Sponsorship is unknown." },
+    unsupportedClaims: {},
+    summary: "Manual review is required.",
+  });
+  assert.deepEqual(parsed.objections, ["Compensation is unknown.", "Sponsorship is unknown."]);
+  assert.deepEqual(parsed.unsupportedClaims, []);
 });
 
 test("model role-family labels normalize into the eight canonical families", () => {

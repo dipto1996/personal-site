@@ -30,7 +30,7 @@ $plainLength = $credential.GetNetworkCredential().Password.Length
 if ($plainLength -lt 32) { throw 'JOBSEARCH_WORKER_TOKEN must contain at least 32 characters.' }
 
 $config = [ordered]@{
-  protocolVersion = 'job-worker-2026-07-v4'
+  protocolVersion = 'job-worker-2026-07-v6'
   repositoryRoot = $script:RepositoryRoot
   endpoint = $Endpoint.TrimEnd('/')
   nodePath = (Resolve-Path -LiteralPath $NodePath).Path

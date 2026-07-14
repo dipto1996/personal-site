@@ -1,7 +1,7 @@
 import { TARGET_PROFILE } from "./profile.js";
 import { classifyCandidateTitle } from "./title-ontology.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v4";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v5";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 
@@ -365,8 +365,16 @@ function expertiseGate(job, dimensions, modelGate) {
   if (score !== null && score < 2.5) {
     return normalizeGate({ status: "blocked", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning, sourceUrl });
   }
-  if (score !== null && score >= 2.5) {
+  if (score !== null && score >= 3) {
     return normalizeGate({ status: "met", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning, sourceUrl });
+  }
+  if (score !== null) {
+    return normalizeGate({
+      status: "unknown",
+      evidenceStatus: modelGate?.evidenceStatus || "inferred",
+      reason: `${dimensions.expertiseFit.reasoning} The fit is partial and needs owner review before this must-have gate can be treated as satisfied.`,
+      sourceUrl,
+    });
   }
   if (ontology.eligible) {
     return normalizeGate({ status: "unknown", evidenceStatus: "inferred", reason: "The title passed candidate routing, but responsibility-level expertise fit was not established by the evaluation.", sourceUrl });

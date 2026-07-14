@@ -191,6 +191,26 @@ test("title routing alone cannot mark expertise as met", () => {
   assert.equal(result.verdict, "maybe");
 });
 
+test("partial expertise fit stays under review until responsibilities reach substantive fit", () => {
+  const job = {
+    title: "Director of Product Analytics",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "Own a partially adjacent analytics program.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  };
+  const partial = finalizeDeepEvaluation(job, modelEvaluation({
+    expertiseFit: dimension(2.5, "Partial but credible transferable fit."),
+  }));
+  const substantive = finalizeDeepEvaluation(job, modelEvaluation({
+    expertiseFit: dimension(3, "Substantive transferable analytics fit."),
+  }));
+
+  assert.equal(partial.mustHave.expertiseFit.status, "unknown");
+  assert.equal(partial.verdict, "maybe");
+  assert.equal(substantive.mustHave.expertiseFit.status, "met");
+});
+
 test("unknown evidence status always produces a null score", () => {
   const result = finalizeDeepEvaluation({
     title: "Director of Product Analytics",

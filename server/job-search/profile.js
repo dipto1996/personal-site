@@ -3,7 +3,7 @@ import { parseCsv } from "./utils.js";
 export const DEFAULT_OWNER_EMAILS = ["roydiptopal1996@gmail.com"];
 
 export const TARGET_PROFILE = {
-  version: "2026-07-14-analytics-first-v4",
+  version: "2026-07-14-analytics-first-v5",
   headline: "Analytics, experimentation, product analytics, and data science leader; AI product founder",
   baseline:
     process.env.JOBSEARCH_CANDIDATE_BASELINE

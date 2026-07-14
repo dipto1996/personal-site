@@ -1,6 +1,6 @@
 # Job Search Decision System
 
-Version: `2026-07-14-analytics-first-v4`
+Version: `2026-07-14-analytics-first-v5`
 
 This is the auditable specification for discovery, title routing, LLM prompts, deterministic gates, and ranking. The executable definitions remain the source of truth in `server/job-search/profile.js`, `server/job-search/title-ontology.js`, `server/job-search/worker-contract.js`, and `server/job-search/evaluation-framework.js`.
 
@@ -37,14 +37,14 @@ There are no negative Google-search terms.
 The exact eight Google Jobs queries are below. SerpApi adds `engine=google_jobs`, `location=United States`, and `date_posted:today` to each query.
 
 ```text
-1. ("Analytics Manager" OR "Senior Analytics Manager" OR "Director of Analytics" OR "Head of Analytics" OR "Analytics Lead" OR "Business Intelligence Manager") (manager OR director OR head OR lead OR principal OR senior)
-2. ("Data Science Manager" OR "Manager of Data Science" OR "Director of Data Science" OR "Decision Science Manager" OR "Product Scientist") (manager OR director OR head OR lead OR principal OR senior)
-3. ("Product Analytics Manager" OR "Product Analytics Lead" OR "Experimentation Lead" OR "Experimentation Manager" OR "Measurement Lead" OR "Growth Data Science") (manager OR director OR head OR lead OR principal OR senior)
-4. ("Marketing Analytics Manager" OR "Customer Analytics Manager" OR "Commercial Analytics" OR "Customer Insights Lead" OR "Marketing Science Lead" OR "Retention Analytics") (manager OR director OR head OR lead OR principal OR senior)
-5. ("Data Product Manager" OR "Data Products Lead" OR "Analytics Product Manager" OR "Decision Products Lead" OR "Data Strategy Director" OR "data engineering") (manager OR director OR head OR lead OR principal OR senior)
-6. ("Strategy and Analytics" OR "Analytics Strategy" OR "Business Manager" OR "BizOps Analytics" OR "Commercial Strategy Manager" OR "Performance Analytics Manager") (manager OR director OR head OR lead OR principal OR senior)
-7. ("AI Product Manager" OR "AI Product Lead" OR "AI Strategy Lead" OR "AI Operator" OR "AI Enablement Lead" OR "AI Governance Lead") (manager OR director OR head OR lead OR principal OR senior OR operator)
-8. (fintech OR payments OR credit OR banking OR insurance OR lending) ("Analytics Manager" OR "Data Science Manager" OR "Product Analytics" OR "Strategy and Analytics" OR "Data Product") (manager OR director OR head OR lead OR principal OR senior)
+1. ((analytics OR "data analysis" OR "business intelligence" OR "business insights" OR "customer insights" OR "decision support") (manager OR director OR head OR lead OR principal OR senior OR vp OR chief))
+2. ((("data science" OR "decision science" OR "applied science" OR "marketing science" OR "measurement science") (manager OR director OR head OR lead OR principal OR senior OR vp OR chief)) OR "Product Scientist" OR "Decision Scientist" OR "Product Data Scientist")
+3. (("product analytics" OR experimentation OR measurement OR "causal inference" OR "conversion optimization" OR "growth analytics") (manager OR director OR head OR lead OR principal OR senior OR vp OR chief))
+4. (("marketing analytics" OR "customer analytics" OR "commercial analytics" OR "customer insights" OR "retention analytics" OR "acquisition analytics" OR "lifecycle analytics") (manager OR director OR head OR lead OR principal OR senior OR vp OR chief))
+5. (("data product" OR "analytics product" OR "data strategy" OR "data platform" OR "data engineering" OR "data management" OR "data architecture") (manager OR director OR head OR lead OR principal OR senior OR vp OR chief))
+6. ((("strategy and analytics" OR "strategy analytics" OR "analytics strategy" OR "business analytics" OR "performance analytics" OR "performance management" OR bizops) (manager OR director OR head OR lead OR principal OR senior OR vp OR chief)) OR "Business Manager" OR "Chief of Staff")
+7. ((("AI product" OR "AI strategy" OR "AI enablement" OR "AI governance" OR "Responsible AI" OR "LLM evaluation") (manager OR director OR head OR lead OR principal OR senior OR vp OR chief)) OR "AI Operator" OR "Context Engineer")
+8. ((fintech OR payments OR credit OR banking OR insurance OR lending) (analytics OR "data science" OR "decision science" OR strategy OR "data product" OR decisioning) (manager OR director OR head OR lead OR principal OR senior OR vp OR chief))
 ```
 
 Brave/local-browser discovery prepends one rotating source group to each query: LinkedIn + Wellfound + YC, specialist portals, Greenhouse/Lever/Ashby, Workday/SmartRecruiters/Workable/iCIMS/Jobvite/BambooHR/Breezy, or generic company career-page paths. Four rotating exploratory queries cover conversion/lifecycle/retention/acquisition analytics; customer decisioning/marketing science/commercial insights/growth measurement; experimentation/measurement/causal inference; and AI enablement/operating model/data commercialization.
@@ -100,7 +100,7 @@ The exact final-decision order is:
 1. Normalize every model dimension to 0-5 or null.
 2. Recompute work authorization, compensation, and coding-interview gates from stored evidence.
 3. Expertise is blocked for an excluded engineering function or model expertiseFit < 2.5.
-4. Expertise is met for model expertiseFit >= 2.5; if absent, an eligible title keeps expertise unknown until responsibilities establish fit.
+4. Expertise is met for model expertiseFit >= 3.0. Scores from 2.5 through 2.9 remain unknown / review; if absent, an eligible title also keeps expertise unknown until responsibilities establish fit.
 5. Replace blocked gate dimensions with 0; replace a met-but-unscored gate with 4.
 6. For unknown coding risk only, use archetype suggestion 2 (elevated) or 4 (low); the gate remains unknown.
 7. Weighted score = sum((dimensionScore or neutral 2.5) / 5 * dimensionWeight).

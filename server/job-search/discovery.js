@@ -40,21 +40,10 @@ const SHARD_LABELS = {
   finserv: "Financial-services analytics and decisioning",
 };
 
-const SHARD_EXTRAS = {
-  analytics: '(manager OR director OR head OR lead OR principal OR senior)',
-  science: '(manager OR director OR head OR lead OR principal OR senior)',
-  "product-experimentation": '(manager OR director OR head OR lead OR principal OR senior)',
-  "marketing-customer": '(manager OR director OR head OR lead OR principal OR senior)',
-  "data-product": '(manager OR director OR head OR lead OR principal OR senior)',
-  strategy: '(manager OR director OR head OR lead OR principal OR senior)',
-  "ai-product-operator": '(manager OR director OR head OR lead OR principal OR senior OR operator)',
-  finserv: '(manager OR director OR head OR lead OR principal OR senior)',
-};
-
 export const QUERY_BUNDLES = buildBroadSearchShards().map((shard) => ({
   id: shard.id,
   label: SHARD_LABELS[shard.id],
-  query: `${shard.query} ${SHARD_EXTRAS[shard.id]}`,
+  query: shard.query,
 }));
 
 export const EXPLORATORY_QUERIES = [
@@ -108,7 +97,7 @@ export function buildSearchPlan({ date = new Date(), exploratoryCount = 2 } = {}
     EXPLORATORY_QUERIES[(dayIndex + index) % EXPLORATORY_QUERIES.length]
   ));
   return {
-    version: "analytics-first-2026-07-14.v3",
+    version: "analytics-first-2026-07-14.v4",
     generatedAt: date.toISOString(),
     titleFamilies: TITLE_FAMILIES.map(({ id, label }) => ({ id, label })),
     portals: JOB_PORTALS,

@@ -1,4 +1,4 @@
-const ONTOLOGY_VERSION = "2026-07-14.analytics-first-v2";
+const ONTOLOGY_VERSION = "2026-07-14.analytics-first-v3";
 
 const PHRASE_NORMALIZATIONS = [
   [/\bartificial intelligence\b/g, "ai"],
@@ -249,15 +249,40 @@ export function classifyCandidateTitle(title) {
 }
 
 export function buildBroadSearchShards() {
+  const seniority = "(manager OR director OR head OR lead OR principal OR senior OR vp OR chief)";
   return [
-    { id: "analytics", query: '("Analytics Manager" OR "Senior Analytics Manager" OR "Director of Analytics" OR "Head of Analytics" OR "Analytics Lead" OR "Business Intelligence Manager")' },
-    { id: "science", query: '("Data Science Manager" OR "Manager of Data Science" OR "Director of Data Science" OR "Decision Science Manager" OR "Product Scientist")' },
-    { id: "product-experimentation", query: '("Product Analytics Manager" OR "Product Analytics Lead" OR "Experimentation Lead" OR "Experimentation Manager" OR "Measurement Lead" OR "Growth Data Science")' },
-    { id: "marketing-customer", query: '("Marketing Analytics Manager" OR "Customer Analytics Manager" OR "Commercial Analytics" OR "Customer Insights Lead" OR "Marketing Science Lead" OR "Retention Analytics")' },
-    { id: "data-product", query: '("Data Product Manager" OR "Data Products Lead" OR "Analytics Product Manager" OR "Decision Products Lead" OR "Data Strategy Director" OR "data engineering")' },
-    { id: "strategy", query: '("Strategy and Analytics" OR "Analytics Strategy" OR "Business Manager" OR "BizOps Analytics" OR "Commercial Strategy Manager" OR "Performance Analytics Manager")' },
-    { id: "ai-product-operator", query: '("AI Product Manager" OR "AI Product Lead" OR "AI Strategy Lead" OR "AI Operator" OR "AI Enablement Lead" OR "AI Governance Lead")' },
-    { id: "finserv", query: '(fintech OR payments OR credit OR banking OR insurance OR lending) ("Analytics Manager" OR "Data Science Manager" OR "Product Analytics" OR "Strategy and Analytics" OR "Data Product")' },
+    {
+      id: "analytics",
+      query: `((analytics OR "data analysis" OR "business intelligence" OR "business insights" OR "customer insights" OR "decision support") ${seniority})`,
+    },
+    {
+      id: "science",
+      query: `((("data science" OR "decision science" OR "applied science" OR "marketing science" OR "measurement science") ${seniority}) OR "Product Scientist" OR "Decision Scientist" OR "Product Data Scientist")`,
+    },
+    {
+      id: "product-experimentation",
+      query: `(("product analytics" OR experimentation OR measurement OR "causal inference" OR "conversion optimization" OR "growth analytics") ${seniority})`,
+    },
+    {
+      id: "marketing-customer",
+      query: `(("marketing analytics" OR "customer analytics" OR "commercial analytics" OR "customer insights" OR "retention analytics" OR "acquisition analytics" OR "lifecycle analytics") ${seniority})`,
+    },
+    {
+      id: "data-product",
+      query: `(("data product" OR "analytics product" OR "data strategy" OR "data platform" OR "data engineering" OR "data management" OR "data architecture") ${seniority})`,
+    },
+    {
+      id: "strategy",
+      query: `((("strategy and analytics" OR "strategy analytics" OR "analytics strategy" OR "business analytics" OR "performance analytics" OR "performance management" OR bizops) ${seniority}) OR "Business Manager" OR "Chief of Staff")`,
+    },
+    {
+      id: "ai-product-operator",
+      query: `((("AI product" OR "AI strategy" OR "AI enablement" OR "AI governance" OR "Responsible AI" OR "LLM evaluation") ${seniority}) OR "AI Operator" OR "Context Engineer")`,
+    },
+    {
+      id: "finserv",
+      query: `((fintech OR payments OR credit OR banking OR insurance OR lending) (analytics OR "data science" OR "decision science" OR strategy OR "data product" OR decisioning) ${seniority})`,
+    },
   ];
 }
 

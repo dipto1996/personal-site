@@ -61,6 +61,11 @@ test("normalization handles morphology and common seniority abbreviations", () =
 test("broad search shards cover functions rather than fixed full titles", () => {
   const shards = buildBroadSearchShards();
   assert.equal(shards.length, 8);
-  assert.ok(shards.every((shard) => !/Director OR Lead OR Head/.test(shard.query)));
+  assert.ok(shards.every((shard) => /manager OR director OR head OR lead OR principal OR senior OR vp OR chief/.test(shard.query)));
+  assert.ok(shards.every((shard) => !/"(?:Analytics|Data Science|Product Analytics) Manager"/.test(shard.query)));
+  assert.match(shards.find((shard) => shard.id === "analytics").query, /analytics OR "data analysis"/);
+  assert.match(shards.find((shard) => shard.id === "science").query, /OR "Product Scientist"/);
+  assert.match(shards.find((shard) => shard.id === "strategy").query, /OR "Business Manager"/);
+  assert.match(shards.find((shard) => shard.id === "ai-product-operator").query, /OR "Context Engineer"/);
   assert.ok(shards.some((shard) => shard.query.includes("data engineering")));
 });

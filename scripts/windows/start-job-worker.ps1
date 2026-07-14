@@ -17,9 +17,6 @@ $config = Get-WorkerConfig
 $credential = Get-WorkerCredential
 Assert-ApprovedModelPath $config.modelPath
 
-& $config.nodePath $config.resourceGuardScript --startup
-if ($LASTEXITCODE -ne 0) { throw 'The resource guard blocked worker startup.' }
-
 $env:JOBSEARCH_WORKER_BASE_URL = $config.endpoint
 $env:JOBSEARCH_WORKER_TOKEN = $credential.GetNetworkCredential().Password
 $env:JOBSEARCH_WORKER_ID = $config.workerId

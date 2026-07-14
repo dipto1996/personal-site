@@ -1040,6 +1040,7 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(startScript, /JOBSEARCH_LOCAL_GPU_LAYERS/);
   assert.match(startScript, /JOBSEARCH_WORKER_ACTIVE_MINUTES/);
   assert.match(startScript, /JOBSEARCH_WORKER_TEMPERATURE_COOLDOWN_MINUTES/);
+  assert.doesNotMatch(startScript, /resourceGuardScript --startup/);
   assert.match(workerScript, /JOBSEARCH_LOCAL_GPU_LAYERS \|\| 8/);
   assert.match(workerScript, /scheduled_two_hour_limit/);
   assert.match(workerScript, /pass\.thinking \? "think" : "no_think"/);

@@ -1831,7 +1831,7 @@ test("deep routing retries a transient Groq JSON-generation failure before falli
   globalThis.fetch = async () => {
     fetchCount += 1;
     if (fetchCount === 1) {
-      return mockModelResponse({ error: { message: "Failed to generate JSON. See failed_generation for details." } }, 400);
+      return mockModelResponse({ error: { message: "Failed to generate JSON. See failed_generation for details. Please try again in 0ms." } }, 400);
     }
     return mockModelResponse({
       model: "openai/gpt-oss-20b",

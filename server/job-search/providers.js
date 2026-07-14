@@ -405,11 +405,16 @@ function shouldRetryGroq({ stage, route, response }) {
 
 function retryDelayMs(response) {
   const message = String(response.error || "");
-  const match = message.match(/try again in\s+([\d.]+)\s*(ms|milliseconds?|s|seconds?)/i);
-  if (!match) return 1500;
+  const match = message.match(/try again in\s+([\d.]+)\s*(ms|milliseconds?|s|seconds?|m|minutes?)/i);
+  if (!match) {
+    return ["rate_limited", "invalid_response", "provider_blocked"].includes(response.status) ? 65000 : 1500;
+  }
   const amount = Number(match[1]);
-  const delay = /^m(?:s|illiseconds?)$/i.test(match[2]) ? amount : amount * 1000;
-  return Math.min(5000, Math.max(1500, Math.ceil(delay + 250)));
+  const unit = match[2].toLowerCase();
+  const delay = /^m(?:s|illisecond)/.test(unit) ? amount
+    : /^m(?:inute)?/.test(unit) ? amount * 60000
+      : amount * 1000;
+  return Math.min(70000, Math.max(250, Math.ceil(delay + 500)));
 }
 
 async function callRoute({ route, messages, schema, runId, operation, maxTokens }) {

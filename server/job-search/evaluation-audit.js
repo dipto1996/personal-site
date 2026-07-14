@@ -70,6 +70,17 @@ export function auditJobEvaluation(job, { promptVersion } = {}) {
   if (vacancy.status === "blocked" && deep.decision?.inputValidation?.status !== "blocked") {
     addFinding(findings, "non_vacancy_scored_as_job", vacancy.reason);
   }
+  if (vacancy.status === "blocked") {
+    if (deep.mustHave?.codingInterview?.status !== "unknown") {
+      addFinding(findings, "non_vacancy_coding_inference", "A non-vacancy source received a job-specific coding-interview conclusion.");
+    }
+    const scoredNonFitDimensions = Object.entries(deep.dimensions || {})
+      .filter(([name, dimension]) => name !== "expertiseFit" && dimension?.score !== null)
+      .map(([name]) => name);
+    if (scoredNonFitDimensions.length) {
+      addFinding(findings, "non_vacancy_dimension_scoring", `A non-vacancy source received job-specific scores: ${scoredNonFitDimensions.join(", ")}.`);
+    }
+  }
   const blockers = Object.entries(gates).filter(([, gate]) => gate?.status === "blocked").map(([key]) => key);
   const unknowns = Object.entries(gates).filter(([, gate]) => gate?.status === "unknown").map(([key]) => key);
   const expectedVerdict = blockers.length ? "pass" : unknowns.length ? "maybe" : Number(deep.overallScore) >= 65 ? "apply" : "maybe";
@@ -98,6 +109,9 @@ export function auditJobEvaluation(job, { promptVersion } = {}) {
     }
     if (["workAuthorization", "compensation"].includes(gateName) && gate.status === "unknown" && dimension?.score !== null) {
       addFinding(findings, "unknown_gate_has_numeric_score", `${dimensionName} has a numeric score even though its must-have gate is unknown.`);
+    }
+    if (gateName === "codingInterview" && gate.status === "unknown" && dimension?.score === 0) {
+      addFinding(findings, "unknown_coding_scored_as_blocked", "Coding-interview risk is unknown but the displayed safety score is 0.");
     }
     if (gate.status === "blocked" && dimension && dimension.score !== 0 && gateName !== "expertiseFit") {
       addFinding(findings, "blocked_gate_score_mismatch", `${dimensionName} is blocked but does not have score 0.`);
@@ -142,6 +156,12 @@ export function auditJobEvaluation(job, { promptVersion } = {}) {
       .map(([key]) => key);
     if (deterministicBlockers.length && critic.recommendedVerdict !== "pass") {
       addFinding(findings, "critic_overrode_deterministic_blocker", `Critic recommendation ignored verified blocker(s): ${deterministicBlockers.join(", ")}.`);
+    }
+    if (!blockers.length && unknowns.length && critic.recommendedVerdict === "apply") {
+      addFinding(findings, "critic_applied_with_unknown_gate", `Critic recommended apply despite unknown must-have gate(s): ${unknowns.join(", ")}.`);
+    }
+    if (critic.agrees && (critic.objections || []).length) {
+      addFinding(findings, "agreeing_critic_has_objections", "Critic claims agreement while presenting corrections as objections.");
     }
   }
 

@@ -158,6 +158,11 @@ test("career landing pages, multi-role result pages, and articles are not specif
     assert.equal(result.verdict, "pass", fixture.title);
     assert.equal(result.mustHave.expertiseFit.basis, "deterministic", fixture.title);
     assert.equal(result.dimensions.expertiseFit.score, 0, fixture.title);
+    assert.equal(result.mustHave.codingInterview.status, "unknown", fixture.title);
+    assert.equal(result.dimensions.codingInterviewSafety.score, null, fixture.title);
+    assert.equal(result.dimensions.companyQuality.score, null, fixture.title);
+    assert.equal(result.overallScore, 0, fixture.title);
+    assert.match(result.summary, /^Rejected source:/, fixture.title);
   }
 });
 
@@ -519,6 +524,19 @@ test("product science and data-science management are elevated review risks, not
   }
 });
 
+test("language-heavy data-science product management is an elevated technical-screen risk", () => {
+  const risk = classifyCodingInterviewRisk({
+    title: "Principal Data Science/AI Product Manager",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "Lead AI products. Proficiency in at least one programming language like Python, R, Scala, or SQL is required.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  });
+  assert.equal(risk.status, "unknown");
+  assert.equal(risk.riskLevel, "elevated");
+  assert.equal(risk.suggestedScore, 2);
+});
+
 test("analytics and product leadership are low inferred coding risks but remain unverified", () => {
   for (const title of ["Senior Analytics Manager", "Strategy and Analytics Lead", "AI Product Manager"]) {
     const risk = classifyCodingInterviewRisk({
@@ -532,6 +550,22 @@ test("analytics and product leadership are low inferred coding risks but remain 
     assert.equal(risk.riskLevel, "low", title);
     assert.equal(risk.suggestedScore, 4, title);
   }
+});
+
+test("unclassified interview risk cannot retain a model-invented safety score", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Project Coordinator",
+    company: "Example",
+    canonicalUrl: "https://example.com/job",
+    description: "Coordinate a cross-functional product content initiative with business stakeholders.",
+    details: { sourceEvidence: [], claims: [], research: { results: [] } },
+  }, modelEvaluation({
+    expertiseFit: dimension(3, "Transferable project leadership."),
+    codingInterviewSafety: dimension(5, "The model guessed no coding round."),
+  }));
+  assert.equal(result.mustHave.codingInterview.status, "unknown");
+  assert.equal(result.mustHave.codingInterview.riskLevel, "unknown");
+  assert.equal(result.dimensions.codingInterviewSafety.score, null);
 });
 
 test("role-specific no-coding evidence overrides an otherwise coding-bound title archetype", () => {

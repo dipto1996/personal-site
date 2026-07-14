@@ -6,7 +6,7 @@ import {
   SPONSORSHIP_AVAILABLE_PATTERN,
 } from "./authorization-evidence.js";
 
-export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v11";
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v12";
 
 export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
 
@@ -47,6 +47,7 @@ const ELEVATED_TECHNICAL_TITLE = /\b(?:product scientist|product data scientist|
 const LOW_CODING_LEADERSHIP_TITLE = /\b(?:analytics|data analysis|insights|business intelligence|strategy|data product|product manager|product management|program manager|business manager|chief of staff|governance|risk|operations)\b/i;
 const HANDS_ON_IMPLEMENTATION = /\bhands-on\b[^.]{0,100}\b(?:coding|python|sql|software development|model development|machine learning engineering)\b|\b(?:write|develop|deploy|maintain|productionize)\b[^.]{0,100}\b(?:production code|software services|machine learning models|ml models)\b/i;
 const TECHNICAL_IMPLEMENTATION_REQUIREMENTS = /\b(?:\d+\+?\s*years?[^.]{0,80}(?:python|software engineering|open source data technolog|api|data pipeline|feature engineering)|developing with open source data technolog|build and maintain scalable data pipelines|production-ready solutions)\b/i;
+const TECHNICAL_ASSESSMENT_RISK = /\b(?:proficien(?:t|cy)|advanced|expert|strong|hands-on)[^.!?]{0,90}\b(?:python|sql|scala|r programming|programming language)\b|\b(?:python|sql|scala|r)\b[^.!?]{0,55}\b(?:proficien(?:t|cy)|coding|programming|hands-on)\b/i;
 const EXPLICIT_ENGINEERING_IDENTITY = /\b(?:you are|seeks?|seeking|looking for|hiring|position is for|role is for)\b[^.!?]{0,100}\b(?:ai\s*(?:&|and)?\s*automation|data|software|machine learning|ml|platform|context|research) engineer\b/i;
 const EXCLUDED_NON_CORE_TITLE = /\b(?:counsel|attorney|lawyer)\b|\b(?:bipartisan\s+)?(?:federal|legislative)\s+policy\s+(?:lead|director|manager|head)\b/i;
 const NON_VACANCY_TITLE = /\b(?:open positions?|current openings?|career opportunities|careers?\s*(?:and|&)\s*internships?|explore careers?|jobs?\s*(?:and|&)\s*careers?)\b|\b(?:artificial intelligence|ai|data science)[^|]{0,45}\bjobs?\b\s*[|:-]/i;
@@ -385,6 +386,16 @@ function authorizationEvidence(job) {
 export function classifyCodingInterviewRisk(job) {
   const title = clean(job?.title);
   const description = clean(job?.description);
+  const vacancy = classifyVacancyIntegrity(job);
+  if (vacancy.status === "blocked") return {
+    status: "unknown",
+    evidenceStatus: "unknown",
+    basis: "deterministic",
+    riskLevel: "unknown",
+    suggestedScore: null,
+    reason: "Coding-interview risk cannot be evaluated because the source is not a specific vacancy.",
+    sourceUrl: "",
+  };
   const posting = { text: description, sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" };
   const claims = relevantClaims(job, /(coding|interview|assessment|technical_screen|sql_test|python_test)/i);
   const researched = researchEvidence(job).filter((item) => (
@@ -429,7 +440,11 @@ export function classifyCodingInterviewRisk(job) {
     reason: "This individual-contributor scientist archetype is highly likely to require Python, SQL, algorithms, or live model-coding assessment; under the no-coding-round requirement it is treated as a blocker until role-specific contrary evidence is found.",
     sourceUrl: job?.canonicalUrl || "",
   };
-  if (HANDS_ON_IMPLEMENTATION.test(description) || TECHNICAL_IMPLEMENTATION_REQUIREMENTS.test(description) || ENGINEERING_TITLE.test(title) || ELEVATED_TECHNICAL_TITLE.test(title)) return {
+  const technicalTitleRisk = ELEVATED_TECHNICAL_TITLE.test(title)
+    || /\b(?:senior|principal|staff)?\s*data science(?:\s*\/\s*ai)?\s*product manager\b/i.test(title)
+    || (/\b(?:analyst|scientist|data science|analytics)\b/i.test(title) && /\b(?:python|sql|scala|r)\b/i.test(title));
+  if (HANDS_ON_IMPLEMENTATION.test(description) || TECHNICAL_IMPLEMENTATION_REQUIREMENTS.test(description)
+      || TECHNICAL_ASSESSMENT_RISK.test(description) || ENGINEERING_TITLE.test(title) || technicalTitleRisk) return {
     status: "unknown",
     evidenceStatus: "inferred",
     basis: "deterministic",
@@ -541,8 +556,13 @@ function applyGateScores(dimensions, gates, compensation) {
     if (["workAuthorization", "compensation"].includes(key) && gate.status === "unknown") {
       updated[key] = { score: null, evidenceStatus: gate.evidenceStatus, confidence: 0, reasoning: gate.reasoning };
     }
-    if (key === "codingInterviewSafety" && gate.status === "unknown" && gate.suggestedScore !== null) {
-      updated[key] = { score: gate.suggestedScore, evidenceStatus: gate.evidenceStatus, confidence: 0.75, reasoning: gate.reasoning };
+    if (key === "codingInterviewSafety" && gate.status === "unknown") {
+      updated[key] = {
+        score: gate.suggestedScore,
+        evidenceStatus: gate.evidenceStatus,
+        confidence: gate.suggestedScore === null ? 0 : 0.75,
+        reasoning: gate.reasoning,
+      };
     }
   }
   if (compensation && gates.compensation.status === "met") {
@@ -567,7 +587,8 @@ function fitPhrase(score) {
   return "The role is outside your core demonstrated expertise";
 }
 
-function decisionSummary(verdict, dimensions, gates) {
+function decisionSummary(verdict, dimensions, gates, vacancy) {
+  if (vacancy?.status === "blocked") return `Rejected source: ${vacancy.reason}`.slice(0, 900);
   const fit = fitPhrase(dimensions.expertiseFit.score);
   const blockers = Object.values(gates).filter((gate) => gate.status === "blocked").map((gate) => gate.reasoning);
   const unknowns = Object.values(gates).filter((gate) => gate.status === "unknown").map((gate) => gate.reasoning);
@@ -579,6 +600,17 @@ function decisionSummary(verdict, dimensions, gates) {
 export function finalizeDeepEvaluation(job, modelEvaluation) {
   const constraint = deterministicExpertiseConstraint(job);
   const dimensions = normalizeDimensions(modelEvaluation?.dimensions || {});
+  const invalidSource = constraint.vacancy?.status === "blocked";
+  if (invalidSource) {
+    for (const key of Object.keys(dimensions)) {
+      dimensions[key] = {
+        score: null,
+        evidenceStatus: "unknown",
+        confidence: 0,
+        reasoning: "Not evaluated because the source is not a specific vacancy.",
+      };
+    }
+  }
   if (constraint.blocked && (dimensions.expertiseFit.score === null || dimensions.expertiseFit.score > constraint.maxScore)) {
     dimensions.expertiseFit = {
       score: constraint.maxScore,
@@ -588,9 +620,13 @@ export function finalizeDeepEvaluation(job, modelEvaluation) {
     };
   }
   const modelGates = modelEvaluation?.mustHave || {};
-  const compensation = compensationEvidence(job);
-  const workAuthorization = normalizeGate({ ...authorizationEvidence(job), basis: "deterministic" }, "Work authorization is not verified.");
-  const compensationRequirement = { ...compensationGate(job), basis: "deterministic" };
+  const compensation = invalidSource ? null : compensationEvidence(job);
+  const workAuthorization = invalidSource
+    ? normalizeGate({ status: "unknown", evidenceStatus: "unknown", reason: "Work authorization was not evaluated because the source is not a specific vacancy.", sourceUrl: "", basis: "deterministic" }, "Work authorization is not verified.")
+    : normalizeGate({ ...authorizationEvidence(job), basis: "deterministic" }, "Work authorization is not verified.");
+  const compensationRequirement = invalidSource
+    ? normalizeGate({ status: "unknown", evidenceStatus: "unknown", reason: "Compensation was not evaluated because the source is not a specific vacancy.", sourceUrl: "", basis: "deterministic" }, "Annual base compensation is not verified.")
+    : { ...compensationGate(job), basis: "deterministic" };
   const codingEvidence = classifyCodingInterviewRisk(job);
   const codingInterview = normalizeGate({ ...(codingEvidence || modelGates.codingInterview), basis: "deterministic" }, "Coding-interview format is not verified.");
   const gates = {
@@ -602,7 +638,7 @@ export function finalizeDeepEvaluation(job, modelEvaluation) {
   const scoredDimensions = applyGateScores(dimensions, gates, compensation);
   const blockers = Object.entries(gates).filter(([, gate]) => gate.status === "blocked").map(([key]) => key);
   const unknowns = Object.entries(gates).filter(([, gate]) => gate.status === "unknown").map(([key]) => key);
-  const overallScore = weightedScore(scoredDimensions);
+  const overallScore = invalidSource ? 0 : weightedScore(scoredDimensions);
   const verdict = blockers.length ? "pass" : unknowns.length ? "maybe" : overallScore >= 65 ? "apply" : "maybe";
   return {
     ...modelEvaluation,
@@ -611,7 +647,7 @@ export function finalizeDeepEvaluation(job, modelEvaluation) {
     modelSummary: clean(modelEvaluation?.summary),
     verdict,
     overallScore,
-    summary: decisionSummary(verdict, scoredDimensions, gates),
+    summary: decisionSummary(verdict, scoredDimensions, gates, constraint.vacancy),
     dimensions: scoredDimensions,
     mustHave: gates,
     decision: {

@@ -2167,6 +2167,26 @@ test("critic cannot overrule a verified deterministic blocker with unknown gates
   assert.equal(normalized.recommendedVerdict, "pass");
   assert.equal(normalized.agrees, true);
   assert.match(normalized.policyOverride, /compensation/);
+  assert.deepEqual(normalized.objections, []);
+  assert.deepEqual(normalized.modelObjections, ["Other gates are unknown."]);
+});
+
+test("critic cannot recommend apply while a must-have gate remains unknown", () => {
+  const job = auditReadyJob();
+  job.details.deepEvaluation.verdict = "maybe";
+  const normalized = workflow.normalizeCriticAgreement({
+    agrees: false,
+    recommendedVerdict: "apply",
+    confidence: 0.9,
+    objections: ["No confirmed coding blocker."],
+    unsupportedClaims: [],
+    summary: "Pursue the role.",
+  }, job);
+  assert.equal(normalized.modelRecommendedVerdict, "apply");
+  assert.equal(normalized.recommendedVerdict, "maybe");
+  assert.equal(normalized.agrees, true);
+  assert.deepEqual(normalized.objections, []);
+  assert.match(normalized.policyOverride, /unknown must-have/i);
 });
 
 test("evaluation audit detects inconsistent near-duplicate evaluations", () => {

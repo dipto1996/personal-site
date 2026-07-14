@@ -284,11 +284,22 @@ async function evaluateTask(task, packet) {
     await assertResourcesSafe({ phase: "runtime" });
     await startModel();
     const pass = getWorkerPass(task.taskType, passName, packet, output);
+    const passStartedAt = Date.now();
+    log("model_pass_started", { taskId: task.id, taskType: task.taskType, passName, passIndex, passCount: passNames.length });
     const response = await callLocalPass(pass);
     output[pass.name] = response.result;
     usage.inputTokens += response.usage.inputTokens;
     usage.outputTokens += response.usage.outputTokens;
     usage.passes.push({ name: pass.name, ...response.usage });
+    log("model_pass_completed", {
+      taskId: task.id,
+      taskType: task.taskType,
+      passName,
+      durationSeconds: Math.round((Date.now() - passStartedAt) / 1000),
+      inputTokens: response.usage.inputTokens,
+      outputTokens: response.usage.outputTokens,
+      repairAttempts: response.usage.repairAttempts,
+    });
     if (passIndex < passNames.length - 1 && interPassCooldownSeconds > 0) {
       await stopModel("inter_pass_rest");
       log("inter_pass_rest_started", {
@@ -498,6 +509,13 @@ while (!stopping && (!maxTasks || processed < maxTasks)) {
 
   const task = claim.task;
   processed += 1;
+  log("task_claimed", {
+    taskId: task.id,
+    taskKey: task.taskKey,
+    taskType: task.taskType,
+    attempt: task.attempt,
+    profileVersion: claim.packet?.candidate?.profileVersion || "",
+  });
   let taskCompleted = false;
   const stopHeartbeat = startHeartbeat(task, () => ({ processed, completed, failed, deferred }));
   try {

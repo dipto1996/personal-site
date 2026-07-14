@@ -1031,8 +1031,8 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(collectorScript, /ConvertTo-ProcessArgument "--chrome=\$\(\$config\.chromePath\)"/);
   assert.match(collectorScript, /ConvertTo-ProcessArgument '--run-label=Scheduled Windows collector'/);
   assert.match(statusScript, /if \(\$process\) \{ @\(\) \} else \{ @\('--startup'\) \}/);
-  assert.match(setupScript, /thermalProfile = 'low-heat'/);
-  assert.match(setupScript, /gpuLayers = 8/);
+  assert.match(setupScript, /thermalProfile = 'cpu-conservative'/);
+  assert.match(setupScript, /gpuLayers = 0/);
   assert.match(setupScript, /cpuThreads = 2/);
   assert.match(setupScript, /activeMinutes = 120/);
   assert.match(setupScript, /cooldownMinutes = 60/);
@@ -1041,7 +1041,8 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(startScript, /JOBSEARCH_WORKER_ACTIVE_MINUTES/);
   assert.match(startScript, /JOBSEARCH_WORKER_TEMPERATURE_COOLDOWN_MINUTES/);
   assert.doesNotMatch(startScript, /resourceGuardScript --startup/);
-  assert.match(workerScript, /JOBSEARCH_LOCAL_GPU_LAYERS \|\| 8/);
+  assert.match(workerScript, /JOBSEARCH_LOCAL_GPU_LAYERS \?\? "0"/);
+  assert.match(workerScript, /Math\.max\(0, Math\.min\(20, requestedGpuLayers\)\)/);
   assert.match(workerScript, /scheduled_two_hour_limit/);
   assert.match(workerScript, /pass\.thinking \? "think" : "no_think"/);
   assert.match(workerScript, /resource_wait_before_claim/);

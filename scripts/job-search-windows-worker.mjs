@@ -34,7 +34,10 @@ const modelName = process.env.JOBSEARCH_LOCAL_LLM_MODEL || "Qwen3-4B-Q4_K_M";
 const modelPath = process.env.JOBSEARCH_LOCAL_MODEL_PATH || "";
 const llamaServerPath = process.env.JOBSEARCH_LLAMA_SERVER_PATH || "";
 const modelBaseUrl = String(process.env.JOBSEARCH_LOCAL_LLM_BASE_URL || "http://127.0.0.1:8080/v1").replace(/\/$/, "");
-const gpuLayers = Math.max(0, Math.min(20, Number(process.env.JOBSEARCH_LOCAL_GPU_LAYERS || 8) || 8));
+const requestedGpuLayers = Number(process.env.JOBSEARCH_LOCAL_GPU_LAYERS ?? "0");
+const gpuLayers = Number.isFinite(requestedGpuLayers)
+  ? Math.max(0, Math.min(20, requestedGpuLayers))
+  : 0;
 const cpuThreads = Math.max(1, Math.min(8, Number(process.env.JOBSEARCH_LOCAL_CPU_THREADS || 2) || 2));
 const runtimeDir = process.env.JOBSEARCH_WORKER_RUNTIME_DIR || path.join(process.env.LOCALAPPDATA || os.homedir(), "DiptopalJobWorker");
 const logDir = path.join(runtimeDir, "logs");

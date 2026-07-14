@@ -243,6 +243,29 @@ test("same-company and same-title research from another location cannot decide h
   assert.equal(result.verdict, "maybe");
 });
 
+test("matching only the state cannot validate evidence from another city", () => {
+  const result = finalizeDeepEvaluation({
+    title: "Director of Product Analytics",
+    company: "Example Analytics",
+    location: "San Francisco, California",
+    canonicalUrl: "https://jobs.example.com/director-product-analytics-san-francisco",
+    description: "Lead product analytics and experimentation in San Francisco.",
+    details: {
+      sourceEvidence: [],
+      claims: [],
+      research: { results: [{
+        title: "Example Analytics Director of Product Analytics - Los Angeles, California",
+        description: "The Los Angeles, California role pays $120,000-$140,000 and has no visa sponsorship.",
+        url: "https://jobs.example.com/director-product-analytics-los-angeles",
+      }] },
+    },
+  }, modelEvaluation({ expertiseFit: dimension(4.5, "Strong product analytics match.") }));
+
+  assert.equal(result.mustHave.workAuthorization.status, "unknown");
+  assert.equal(result.mustHave.compensation.status, "unknown");
+  assert.equal(result.verdict, "maybe");
+});
+
 test("claims without source URLs cannot decide compensation or sponsorship", () => {
   const result = finalizeDeepEvaluation({
     title: "Director of Product Analytics",

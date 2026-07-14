@@ -187,21 +187,21 @@ function comparableJobUrl(value) {
   }
 }
 
-function normalizedLocationMarkers(location) {
+function normalizedLocationMarker(location) {
   const ignored = new Set(["remote", "hybrid", "onsite", "on site", "united states", "usa", "multiple locations"]);
-  return clean(location).toLowerCase().split(/[,/|;]/)
+  return clean(location).toLowerCase().split(/\s+-\s+|[,/|;]/)
     .map((part) => part.replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim())
-    .filter((part) => part.length >= 4 && !ignored.has(part) && !/^[a-z]{2}$/.test(part));
+    .find((part) => part.length >= 4 && !ignored.has(part) && !/^[a-z]{2}$/.test(part)) || "";
 }
 
 function evidenceMatchesJobPosting(item, job) {
   const evidenceUrl = comparableJobUrl(item?.sourceUrl);
   const postingUrl = comparableJobUrl(job?.canonicalUrl);
   if (evidenceUrl && postingUrl && evidenceUrl === postingUrl) return true;
-  const locationMarkers = normalizedLocationMarkers(job?.location);
-  if (!locationMarkers.length) return false;
+  const locationMarker = normalizedLocationMarker(job?.location);
+  if (!locationMarker) return false;
   const text = clean(item?.text).toLowerCase().replace(/[^a-z0-9 ]+/g, " ");
-  return locationMarkers.some((marker) => text.includes(marker));
+  return text.includes(locationMarker);
 }
 
 function claimMatchesJobPosting(claim, job) {

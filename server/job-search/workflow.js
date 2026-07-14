@@ -923,6 +923,9 @@ export async function enqueueJobsForLocalProcessing({ runId = null, jobIds = [] 
             : job.status,
       details: {
         ...job.details,
+        ...(taskType === "triage" ? { triageStatus: "pending" } : {}),
+        ...(taskType === "deep" ? { deepStatus: "pending", criticStatus: "pending", modelAgreement: "pending" } : {}),
+        ...(taskType === "critic" ? { criticStatus: "pending", modelAgreement: "pending" } : {}),
         localQueue: { status: task.status, taskId: task.id, taskType, queuedAt: new Date().toISOString() },
       },
     });
@@ -1001,6 +1004,8 @@ export async function runLocalTriageEvaluation({ jobId, runId = null }) {
       triagePromptVersion: PROMPT_VERSION,
       triageProvider: response.provider, triageModel: response.model,
       triageAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
+      deepEvaluation: null, deepStatus: "pending", evaluationFrameworkVersion: null,
+      critic: null, criticStatus: "pending", modelAgreement: "pending", outreach: null,
     },
   });
   await recordEvaluation({
@@ -1046,6 +1051,7 @@ export async function runLocalDeepEvaluation({ jobId, runId = null }) {
       deepProvider: response.provider, deepModel: response.model,
       deepAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
       research, claims, contactCandidates: research.contactCandidates || [],
+      critic: null, criticStatus: "pending", modelAgreement: "pending", outreach: null,
     },
   });
 }
@@ -1153,6 +1159,13 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
         triageProvider: evaluationBase.provider,
         triageModel: model,
         triageAttempts: [{ provider: evaluationBase.provider, model, status: "live" }],
+        deepEvaluation: null,
+        deepStatus: "pending",
+        evaluationFrameworkVersion: null,
+        critic: null,
+        criticStatus: "pending",
+        modelAgreement: "pending",
+        outreach: null,
       },
     });
   } else if (task.taskType === "deep") {
@@ -1185,6 +1198,10 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
         deepModel: model,
         deepAttempts: [{ provider: evaluationBase.provider, model, status: "live" }],
         claims,
+        critic: null,
+        criticStatus: "pending",
+        modelAgreement: "pending",
+        outreach: null,
       },
     });
   } else if (task.taskType === "critic") {

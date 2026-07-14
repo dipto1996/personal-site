@@ -1,5 +1,6 @@
 import { buildSearchPlan } from "./job-search/discovery.js";
 import { buildJobCardFacts } from "./job-search/card-facts.js";
+import { EVALUATION_FRAMEWORK_VERSION } from "./job-search/evaluation-framework.js";
 import { enqueueJobSearchRun } from "./job-search/inngest.js";
 import { ownerEmails, TARGET_PROFILE } from "./job-search/profile.js";
 import { getFreeProviderQuotaSummary, providerConfiguration, runFreeProviderCanary } from "./job-search/providers.js";
@@ -7,6 +8,7 @@ import {
   enqueueNextWindowsTask,
   reconcileHeldWindowsQueue,
   releaseHeldWindowsBacklog,
+  PROMPT_VERSION,
   resumeWindowsQueue,
   retryFailedWindowsTasks,
 } from "./job-search/workflow.js";
@@ -111,8 +113,13 @@ export function getJobSearchStatus(sessionContext) {
 }
 
 function publicJob(job) {
-  const deep = job.details?.deepEvaluation || null;
-  const critic = job.details?.critic || null;
+  const triageCurrent = job.details?.triageStatus === "complete"
+    && job.details?.triagePromptVersion === PROMPT_VERSION;
+  const deepCurrent = job.details?.deepStatus === "complete"
+    && job.details?.evaluationFrameworkVersion === EVALUATION_FRAMEWORK_VERSION;
+  const triage = triageCurrent ? job.details?.triage || null : null;
+  const deep = deepCurrent ? job.details?.deepEvaluation || null : null;
+  const critic = deepCurrent && job.details?.criticStatus === "complete" ? job.details?.critic || null : null;
   const cardFacts = buildJobCardFacts(job);
   return {
     id: job.id,
@@ -133,17 +140,17 @@ function publicJob(job) {
     status: job.status,
     disposition: job.disposition,
     userFeedback: job.disposition === "apply" ? 1 : job.disposition === "pass" ? -1 : 0,
-    triage: job.details?.triage || null,
+    triage,
     score: deep?.overallScore ?? null,
     verdict: deep?.verdict || null,
-    summary: deep?.summary || job.details?.triage?.scopeSummary || "Awaiting evaluation.",
+    summary: deep?.summary || triage?.scopeSummary || "Awaiting evaluation under the current decision framework.",
     dimensions: deep?.dimensions || null,
     mustHave: deep?.mustHave || null,
     decision: deep?.decision || null,
     greenFlags: deep?.greenFlags || [],
     redFlags: deep?.redFlags || [],
-    unknowns: deep?.unknowns || job.details?.triage?.unknowns || [],
-    claims: job.details?.claims || job.details?.sourceEvidence || [],
+    unknowns: deep?.unknowns || triage?.unknowns || [],
+    claims: deep ? job.details?.claims || job.details?.sourceEvidence || [] : job.details?.sourceEvidence || [],
     critic,
     modelAgreement: job.details?.modelAgreement || "pending",
     outreach: job.details?.outreach || null,
@@ -158,8 +165,8 @@ function publicJob(job) {
     },
     models: {
       triage: { provider: job.details?.triageProvider || null, model: job.details?.triageModel || null },
-      deep: { provider: job.details?.deepProvider || null, model: job.details?.deepModel || null },
-      critic: { provider: job.details?.criticProvider || null, model: job.details?.criticModel || null },
+      deep: { provider: deep ? job.details?.deepProvider || null : null, model: deep ? job.details?.deepModel || null : null },
+      critic: { provider: critic ? job.details?.criticProvider || null : null, model: critic ? job.details?.criticModel || null : null },
     },
     firstSeenAt: job.firstSeenAt,
     lastSeenAt: job.lastSeenAt,

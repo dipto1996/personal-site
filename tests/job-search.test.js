@@ -717,6 +717,30 @@ test("candidate review queues expose relevant, uncertain, and clear-mismatch job
   assert.equal(dashboard.summary.clearMismatches, 1);
 });
 
+test("dashboard hides stale model summaries while a current-framework evaluation is pending", async () => {
+  const job = await seedJob({
+    sourceId: "stale_dashboard_evaluation",
+    sourceProvider: "serpapi_google_jobs",
+    status: "deep_review_pending",
+    details: {
+      triageStatus: "complete",
+      triagePromptVersion: "legacy-prompt",
+      triage: { relevance: "relevant", scopeSummary: "Legacy triage summary." },
+      deepStatus: "pending",
+      evaluationFrameworkVersion: "legacy-framework",
+      deepEvaluation: { verdict: "pass", overallScore: 12, summary: "Legacy incorrect summary." },
+      sourceEvidence: [],
+    },
+  });
+  const dashboard = await jobSearch.getJobSearchDashboard({ view: "all_candidates" });
+  const visible = dashboard.jobs.find((candidate) => candidate.id === job.id);
+
+  assert.equal(visible.score, null);
+  assert.equal(visible.verdict, null);
+  assert.equal(visible.summary, "Awaiting evaluation under the current decision framework.");
+  assert.equal(visible.triage, null);
+});
+
 test("job-search access is restricted to the configured owner", async () => {
   const owner = await auth.registerUser({ name: "Owner", email: "owner@example.com", password: "OwnerPass123!" });
   const outsider = await auth.registerUser({ name: "Outsider", email: "outsider@example.com", password: "OutsiderPass123!" });

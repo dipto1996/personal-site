@@ -14,6 +14,7 @@ import { parseStructuredContent } from "../server/job-search/schemas.js";
 import { cooldownDurationForReason, resolveThermalCycleState, shouldRetryWorkerTask, workerFailureCategory } from "../server/job-search/windows-worker-runtime.js";
 
 const args = new Set(process.argv.slice(2));
+const RUNTIME_RESOURCE_CHECK_MS = 5_000;
 const valueArg = (name, fallback) => {
   const item = [...args].find((argument) => argument.startsWith(`${name}=`));
   return item ? item.slice(name.length + 1) : fallback;
@@ -214,7 +215,7 @@ async function callLocalPass(pass) {
       } finally {
         monitorInFlight = false;
       }
-    }, 15_000);
+    }, RUNTIME_RESOURCE_CHECK_MS);
     monitor.unref();
     let response;
     try {

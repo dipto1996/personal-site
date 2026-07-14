@@ -7,6 +7,12 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const GIB = 1024 ** 3;
 
+export const WINDOWS_GPU_TEMPERATURE_LIMITS = Object.freeze({
+  startup: 60,
+  task: 68,
+  runtime: 68,
+});
+
 const inventoryScript = String.raw`
 $os=Get-CimInstance Win32_OperatingSystem
 $cpu=Get-CimInstance Win32_Processor | Select-Object -First 1
@@ -57,7 +63,8 @@ export function evaluateResourceGuard(inventory, { phase = "task" } = {}) {
   if (phase === "startup" && inventory.nvidia && inventory.nvidia.freeVramMiB < 4000) {
     reasons.push("At least 4000 MiB free NVIDIA VRAM is required before model startup.");
   }
-  const maximumGpuTemperature = phase === "startup" ? 68 : 78;
+  const maximumGpuTemperature = WINDOWS_GPU_TEMPERATURE_LIMITS[phase]
+    ?? WINDOWS_GPU_TEMPERATURE_LIMITS.task;
   if (inventory.nvidia?.temperatureCelsius >= maximumGpuTemperature) {
     reasons.push(`GPU temperature is ${inventory.nvidia.temperatureCelsius} C; maximum for ${phase} is ${maximumGpuTemperature} C.`);
   }

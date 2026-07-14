@@ -1047,6 +1047,8 @@ test("Windows collector launcher quotes paths and status uses the live resource 
   assert.match(workerScript, /beginCooldown\("temperature_guard"\)/);
   assert.match(workerScript, /cooldownDurationForReason/);
   assert.match(workerScript, /AbortSignal\.any/);
+  assert.match(workerScript, /RUNTIME_RESOURCE_CHECK_MS = 5_000/);
+  assert.match(workerScript, /setInterval\([\s\S]*RUNTIME_RESOURCE_CHECK_MS\)/);
   assert.ok(workerScript.indexOf("resourcesReadyBeforeClaim()") < workerScript.indexOf('workerFetch("claim"'));
 });
 
@@ -1071,7 +1073,7 @@ test("Windows resource guard permits this model tier and always rejects Qwen3-14
     memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 8 * (1024 ** 3) },
     disk: { freeBytes: 100 * (1024 ** 3) },
     cpu: { loadPercent: 25 },
-    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500, temperatureCelsius: 65 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500, temperatureCelsius: 55 },
   }, { phase: "startup" });
   assert.equal(evaluation.ok, true);
   assert.equal(evaluation.summary.totalVramMiB, 6144);
@@ -1079,17 +1081,25 @@ test("Windows resource guard permits this model tier and always rejects Qwen3-14
     memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 3 * (1024 ** 3) },
     disk: { freeBytes: 100 * (1024 ** 3) },
     cpu: { loadPercent: 25 },
-    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 2300, temperatureCelsius: 75 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 2300, temperatureCelsius: 67 },
   }, { phase: "runtime" });
   assert.equal(runtime.ok, true);
   const runtimeTooHot = resourceGuard.evaluateResourceGuard({
     memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 8 * (1024 ** 3) },
     disk: { freeBytes: 100 * (1024 ** 3) },
     cpu: { loadPercent: 25 },
-    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500, temperatureCelsius: 78 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500, temperatureCelsius: 68 },
   }, { phase: "runtime" });
   assert.equal(runtimeTooHot.ok, false);
-  assert.equal(runtimeTooHot.summary.maximumGpuTemperatureCelsius, 78);
+  assert.equal(runtimeTooHot.summary.maximumGpuTemperatureCelsius, 68);
+  const startupTooWarm = resourceGuard.evaluateResourceGuard({
+    memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 8 * (1024 ** 3) },
+    disk: { freeBytes: 100 * (1024 ** 3) },
+    cpu: { loadPercent: 25 },
+    nvidia: { name: "GTX 1660 Ti", totalVramMiB: 6144, freeVramMiB: 5500, temperatureCelsius: 60 },
+  }, { phase: "startup" });
+  assert.equal(startupTooWarm.ok, false);
+  assert.equal(startupTooWarm.summary.maximumGpuTemperatureCelsius, 60);
   const hot = resourceGuard.evaluateResourceGuard({
     memory: { totalBytes: 16 * (1024 ** 3), availableBytes: 8 * (1024 ** 3) },
     disk: { freeBytes: 100 * (1024 ** 3) },

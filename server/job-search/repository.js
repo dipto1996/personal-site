@@ -1327,9 +1327,15 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
     leaseUntil: null, leasedBy: "", leaseToken: "", resultId: "",
     createdAt: timestamp, updatedAt: timestamp, completedAt: null,
   };
+  const downstreamTypes = taskType === "triage" ? ["triage", "deep", "critic", "outreach"]
+    : taskType === "deep" ? ["deep", "critic", "outreach"]
+      : taskType === "critic" ? ["critic", "outreach"]
+        : [taskType];
+  const pendingStatuses = new Set(["queued", "retry", "held"]);
   if (!hasDatabase()) {
     return mutateLocal((db) => {
       const existing = db.localTasks.find((task) => task.taskKey === taskKey);
+      let current = existing;
       if (existing) {
         existing.priority = Math.max(Number(existing.priority) || 0, record.priority);
         existing.payload = { ...(existing.payload || {}), ...(record.payload || {}) };
@@ -1338,10 +1344,20 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
           existing.availableAt = timestamp;
         }
         existing.updatedAt = timestamp;
-        return structuredClone(existing);
+      } else {
+        db.localTasks.push(record);
+        current = record;
       }
-      db.localTasks.push(record);
-      return record;
+      db.localTasks.forEach((task) => {
+        if (task.id === current.id || task.jobId !== jobId || !downstreamTypes.includes(task.taskType) || !pendingStatuses.has(task.status)) return;
+        Object.assign(task, {
+          status: "superseded",
+          completedAt: timestamp,
+          updatedAt: timestamp,
+          lastError: `Superseded by ${current.id}.`,
+        });
+      });
+      return structuredClone(current);
     });
   }
   const sql = getSql();
@@ -1370,6 +1386,15 @@ export async function enqueueLocalTask({ jobId, taskType, payload = {}, priority
     available_at AS "availableAt", lease_until AS "leaseUntil", leased_by AS "leasedBy",
     lease_token AS "leaseToken", result_id AS "resultId",
     created_at AS "createdAt", updated_at AS "updatedAt", completed_at AS "completedAt"`;
+  await sql`UPDATE js_local_tasks SET
+    status='superseded',
+    completed_at=${timestamp},
+    updated_at=${timestamp},
+    last_error=${`Superseded by ${row.id}.`}
+    WHERE job_id=${jobId}
+      AND id<>${row.id}
+      AND task_type = ANY(${downstreamTypes})
+      AND status = ANY(${[...pendingStatuses]})`;
   return row;
 }
 

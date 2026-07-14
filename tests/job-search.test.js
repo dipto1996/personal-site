@@ -324,6 +324,18 @@ test("local work queue is idempotent and leases one task at a time", async () =>
   assert.equal(completed.status, "completed");
 });
 
+test("new task revisions supersede stale stages and downstream work", async () => {
+  const job = await seedJob({ sourceId: "local_queue_revision" });
+  const critic = await repository.enqueueLocalTask({ jobId: job.id, taskType: "critic", revision: "critic:v1" });
+  const firstDeep = await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: "deep:v1" });
+  const latestDeep = await repository.enqueueLocalTask({ jobId: job.id, taskType: "deep", revision: "deep:v2" });
+  const tasks = await repository.listLocalTasks({ limit: 20 });
+
+  assert.equal(tasks.find((task) => task.id === critic.id).status, "superseded");
+  assert.equal(tasks.find((task) => task.id === firstDeep.id).status, "superseded");
+  assert.equal(tasks.find((task) => task.id === latestDeep.id).status, "queued");
+});
+
 test("queue hold and controlled release preserve history and only activate the released cohort", async () => {
   process.env.JOBSEARCH_LOCAL_WORKER_ENABLED = "true";
   try {

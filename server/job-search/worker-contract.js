@@ -44,26 +44,6 @@ const deepWorkerEvaluationSchema = deepEvaluationSchema.extend({
   verdict: z.enum(["apply", "maybe", "pass"]).describe("apply means pursue; maybe means manual review; pass means reject or skip"),
   overallScore: z.number().int().min(0).max(100).describe("integer attractiveness score from 0 to 100, never a 0-to-5 dimension score"),
   claims: z.array(workerGroundedEvidenceSchema).max(6).default([]),
-}).superRefine((evaluation, context) => {
-  const dimensions = Object.values(evaluation.dimensions || {});
-  const averageDimension = dimensions.length
-    ? dimensions.reduce((sum, dimension) => sum + Number(dimension.score || 0), 0) / dimensions.length
-    : 0;
-  if (evaluation.verdict === "apply" && evaluation.overallScore < 70) {
-    context.addIssue({ code: "custom", path: ["overallScore"], message: "An apply verdict requires an overall score of at least 70." });
-  }
-  if (evaluation.verdict === "maybe" && (evaluation.overallScore < 40 || evaluation.overallScore > 84)) {
-    context.addIssue({ code: "custom", path: ["overallScore"], message: "A maybe verdict requires an overall score from 40 through 84." });
-  }
-  if (evaluation.verdict === "pass" && evaluation.overallScore > 50) {
-    context.addIssue({ code: "custom", path: ["overallScore"], message: "A pass (reject/skip) verdict cannot score above 50." });
-  }
-  if (averageDimension >= 4 && evaluation.verdict === "pass") {
-    context.addIssue({ code: "custom", path: ["verdict"], message: "High dimension scores contradict a pass (reject/skip) verdict." });
-  }
-  if (averageDimension <= 2 && evaluation.verdict === "apply") {
-    context.addIssue({ code: "custom", path: ["verdict"], message: "Low dimension scores contradict an apply (pursue) verdict." });
-  }
 });
 
 export const workerOutputs = Object.freeze({
@@ -94,9 +74,10 @@ function compactEvidence(item) {
 function evidencePriority(item) {
   const text = `${item.claimType} ${item.value} ${item.supportingPassage}`.toLowerCase();
   let priority = 0;
-  if (/visa|sponsor|work authorization|citizen|clearance|eligible|eligibility|remote|hybrid|on-site|onsite|location|india|relocat/.test(text)) priority += 1000;
-  if (/compensation|salary|pay|bonus|equity|rsu|stock|benefit/.test(text)) priority += 800;
-  if (/coding|code|python|sql|engineer|technical interview|algorithm|software|platform/.test(text)) priority += 700;
+  if (/visa|sponsor|work authorization|citizen|clearance|eligible|eligibility|e-verify|h-1b|h1b|stem opt|f-1 opt/.test(text)) priority += 1000;
+  if (/compensation|salary|pay|bonus|equity|rsu|stock|benefit/.test(text)) priority += 900;
+  if (/coding|code|python|sql|engineer|technical interview|algorithm|software|platform/.test(text)) priority += 800;
+  if (/remote|hybrid|on-site|onsite|location|india|relocat/.test(text)) priority += 100;
   if (item.evidenceType === "explicit") priority += 100;
   if (item.sourceUrl && item.supportingPassage) priority += 50;
   return priority;
@@ -173,8 +154,13 @@ export function buildWorkerPacket({ task, job, feedbackExamples = [] }) {
     candidate: {
       profileVersion: TARGET_PROFILE.version,
       baseline: TARGET_PROFILE.baseline,
+      coreExpertise: TARGET_PROFILE.coreExpertise,
+      differentiators: TARGET_PROFILE.differentiators,
       targetGeography: TARGET_PROFILE.targetGeography,
       compensation: TARGET_PROFILE.compensation,
+      workAuthorization: TARGET_PROFILE.workAuthorization,
+      hardRequirements: TARGET_PROFILE.hardRequirements,
+      rankingWeights: TARGET_PROFILE.rankingWeights,
       avoid: TARGET_PROFILE.avoid,
       outreachIdentity: TARGET_PROFILE.outreachIdentity,
     },
@@ -216,7 +202,7 @@ function triageMessages(packet) {
     },
     {
       role: "user",
-      content: `Candidate profile:\n${packet.candidate.baseline}\n\nConstraints:\n${packet.candidate.avoid}\n${packet.candidate.targetGeography}\n\nJob:\n${JSON.stringify(packet.job, null, 2)}\n\nUse relevance=irrelevant only for a clear function mismatch. A role mentioning Python, SQL, or engineering partnership is not automatically coding-heavy. Return a single triage object using a canonical roleFamilyId.`,
+      content: `Candidate profile:\n${packet.candidate.baseline}\n\nCore expertise, in priority order:\n${JSON.stringify(packet.candidate.coreExpertise, null, 2)}\n\nAdditional differentiators, not prerequisites:\n${JSON.stringify(packet.candidate.differentiators, null, 2)}\n\nConstraints:\n${packet.candidate.avoid}\n${packet.candidate.targetGeography}\n\nJob:\n${JSON.stringify(packet.job, null, 2)}\n\nUse relevance=irrelevant only for a clear primary-function mismatch. Analytics, experimentation, product analytics, marketing/customer analytics, strategy analytics, data-science management, decision science, data products, and cross-functional product-building are core matches in any industry. Do not require AI or financial-services content. A role mentioning Python, SQL, statistics, model building, or engineering partnership is not automatically coding-interview-heavy. Return a single triage object using a canonical roleFamilyId.`,
     },
   ];
 }
@@ -246,7 +232,7 @@ function deepMessages(packet, extraction) {
     },
     {
       role: "user",
-      content: `Candidate:\n${packet.candidate.baseline}\n\nTarget geography: ${packet.candidate.targetGeography}\nCompensation: ${packet.candidate.compensation}\nAvoid: ${packet.candidate.avoid}\n\nJob:\n${JSON.stringify(packet.job, null, 2)}\n\nValidated evidence extraction:\n${JSON.stringify(compactExtraction, null, 2)}\n\nPrior owner feedback:\n${JSON.stringify(packet.feedbackExamples, null, 2)}\n\nEvaluate role fit, financial-services advantage, AI/data relevance, leadership, coding/interview risk, location/authorization, compensation/upside, company quality, and interview velocity. Keep dimension reasoning concise. Verdict semantics are mandatory: apply means pursue the job, maybe means manual review, and pass means reject or skip the job; pass never means a successful grade. overallScore must be an integer attractiveness score from 0 to 100, not a 0-to-5 dimension score. A coherent strong fit with dimension scores around 4-5 should normally score 75-100 and be apply; a clear mismatch or blocker should normally score 0-39 and be pass. A primarily hands-on data/software/platform engineering role must score roleFit 0-2 and verdict pass. US on-site/hybrid is incompatible with continuing from India unless global-remote evidence is explicit. Citizenship, clearance, or incompatible work authorization is a blocker. Do not infer interview format, compensation, visa, or remote eligibility from silence. Every explicit or inferred claim must cite the validated evidence with a non-empty sourceUrl and supportingPassage.`,
+      content: `Candidate:\n${packet.candidate.baseline}\n\nCore expertise:\n${JSON.stringify(packet.candidate.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(packet.candidate.differentiators, null, 2)}\n\nFour must-have gates:\n${JSON.stringify(packet.candidate.hardRequirements, null, 2)}\n\nTarget geography: ${packet.candidate.targetGeography}\nCompensation: ${packet.candidate.compensation}\nWork authorization: ${packet.candidate.workAuthorization}\nAvoid: ${packet.candidate.avoid}\nRanking weights: ${JSON.stringify(packet.candidate.rankingWeights)}\n\nJob:\n${JSON.stringify(packet.job, null, 2)}\n\nValidated evidence extraction:\n${JSON.stringify(compactExtraction, null, 2)}\n\nPrior owner feedback:\n${JSON.stringify(packet.feedbackExamples, null, 2)}\n\nFirst evaluate the four must-have gates: expertise fit, work authorization, compensation, and coding-interview safety. Use status=blocked only for supported incompatibility, status=unknown when evidence is missing, and status=met when supported. Then score these dimensions: expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility. Each dimension is 0-5 where 5 is most attractive. Use score=null and evidenceStatus=unknown when evidence is missing; never convert unknown to 0. codingInterviewSafety 5 means low/no coding-interview risk and 0 means explicit high risk. interviewVelocity concerns process speed only. leadershipScope concerns responsibility and people/decision scope only. Public-sector or non-financial-services work may reduce an optional domain bonus, but must not reduce expertise fit or leadership scope when responsibilities match. AI/ML adjacency, financial-services overlap, and remote flexibility are bonuses, not prerequisites. US on-site/hybrid work is acceptable when work authorization is compatible; remote-from-India is not required. A primarily engineering-implementation role is a function blocker, but Python, SQL, statistical modeling, and model development inside analytics/data-science work are not automatically blockers. Missing compensation, visa, or interview evidence must produce unknown gates and a maybe recommendation, not a pass. Explicit no-current-or-future sponsorship, citizenship/clearance, a confirmed salary maximum below $170,000, or explicit software-engineering coding interviews are blockers. Return a model recommendation; the server will apply deterministic gates and weights for the final verdict. Keep reasoning concise, and cite every explicit or inferred claim with supplied evidence.`,
     },
   ];
 }
@@ -259,7 +245,7 @@ function criticMessages(packet) {
     },
     {
       role: "user",
-      content: `Candidate profile:\n${packet.candidate.baseline}\n\nJob and primary evaluation:\n${JSON.stringify({ job: packet.job, primary: packet.job.deepEvaluation, evidence: packet.evidence }, null, 2)}\n\nIdentify unsupported claims, contradictions, hidden coding or eligibility risks, and whether apply|maybe|pass is justified. apply means pursue, maybe means manual review, and pass means reject or skip; pass never means a successful grade. Set agrees=true exactly when recommendedVerdict equals the primary verdict, otherwise false. Missing facts remain unknown.`,
+      content: `Candidate profile:\n${packet.candidate.baseline}\n\nCore expertise:\n${JSON.stringify(packet.candidate.coreExpertise, null, 2)}\n\nFour must-have gates:\n${JSON.stringify(packet.candidate.hardRequirements, null, 2)}\n\nJob and primary evaluation:\n${JSON.stringify({ job: packet.job, primary: packet.job.deepEvaluation, evidence: packet.evidence }, null, 2)}\n\nChallenge unsupported gate statuses, contradictions, hidden coding-interview risk, salary interpretation, and work-authorization evidence. Do not treat industry mismatch, lack of AI, lack of remote work, or public-sector context as a core role-fit failure when analytics/experimentation responsibilities match. apply means pursue, maybe means manual review, and pass means reject. Set agrees=true exactly when recommendedVerdict equals the primary verdict. Missing facts remain unknown and should normally cause maybe unless another must-have gate is explicitly blocked.`,
     },
   ];
 }

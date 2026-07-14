@@ -22,6 +22,7 @@ import {
   recordFeedback,
   repositoryMode,
   rollbackTitlePattern,
+  upsertJob,
   updateTitlePatternStatus,
 } from "./job-search/repository.js";
 
@@ -137,6 +138,8 @@ function publicJob(job) {
     verdict: deep?.verdict || null,
     summary: deep?.summary || job.details?.triage?.scopeSummary || "Awaiting evaluation.",
     dimensions: deep?.dimensions || null,
+    mustHave: deep?.mustHave || null,
+    decision: deep?.decision || null,
     greenFlags: deep?.greenFlags || [],
     redFlags: deep?.redFlags || [],
     unknowns: deep?.unknowns || job.details?.triage?.unknowns || [],
@@ -147,6 +150,7 @@ function publicJob(job) {
     contactCandidates: job.details?.contactCandidates || [],
     feedbackReasons: job.details?.feedbackReasons || [],
     feedbackNote: job.details?.feedbackNote || "",
+    decisionSource: job.disposition ? "owner" : "model",
     providerStates: {
       triage: job.details?.triageStatus || "pending",
       deep: job.details?.deepStatus || "pending",
@@ -163,10 +167,10 @@ function publicJob(job) {
   };
 }
 
-export async function getJobSearchDashboard({ view = "inbox" } = {}) {
+export async function getJobSearchDashboard({ view = "inbox", page = 1, pageSize = 10, decisionSource = "all", roleFamily = "all" } = {}) {
   await ensureJobSearchRepository();
   const [dashboard, freeQuotas] = await Promise.all([
-    getRepositoryDashboard(view),
+    getRepositoryDashboard({ view, page, pageSize, decisionSource, roleFamily }),
     getFreeProviderQuotaSummary(),
   ]);
   return {
@@ -279,7 +283,25 @@ export async function rerunJobSearchJob(jobId) {
     error.statusCode = 404;
     throw error;
   }
-  return runJobSearchIngest({ trigger: "rerun", discoveryUrls: [job.canonicalUrl], slot: "morning" });
+  const refreshed = await upsertJob({
+    ...job,
+    status: "local_triage_pending",
+    details: {
+      ...job.details,
+      triage: null,
+      triageStatus: "pending",
+      triagePromptVersion: null,
+      deepEvaluation: null,
+      deepStatus: "pending",
+      evaluationFrameworkVersion: null,
+      critic: null,
+      criticStatus: "pending",
+      modelAgreement: "pending",
+      outreach: null,
+    },
+  });
+  const task = await enqueueNextWindowsTask(refreshed);
+  return { ok: true, status: task?.status || "queued", taskId: task?.id || null, jobId: refreshed.id };
 }
 
 export async function holdJobSearchLocalQueue(input = {}) {

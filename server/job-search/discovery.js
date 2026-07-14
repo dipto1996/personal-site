@@ -30,25 +30,25 @@ export const ATS_SOURCES = [
 ];
 
 const SHARD_LABELS = {
-  analytics: "Analytics, insights, and intelligence",
-  science: "Data, decision, and product science",
-  "ai-data-product": "AI, ML, and data products",
-  strategy: "Data, AI, analytics, and transformation strategy",
-  "governance-risk": "AI governance, data governance, and model risk",
-  "architecture-platform": "Data architecture, platforms, engineering, and management",
-  "business-operator": "Business strategy, operations, and AI operators",
+  analytics: "Analytics and business-intelligence leadership",
+  science: "Data-science and decision-science management",
+  "product-experimentation": "Product analytics, experimentation, and measurement",
+  "marketing-customer": "Marketing, customer, retention, and commercial analytics",
+  "data-product": "Data products and data strategy",
+  strategy: "Strategy, business management, and performance analytics",
+  "ai-product-operator": "AI product, enablement, governance, and operating roles",
   finserv: "Financial-services analytics and decisioning",
 };
 
 const SHARD_EXTRAS = {
-  analytics: '("advanced analytics" OR "product analytics" OR "marketing analytics")',
-  science: '("Product Scientist" OR "Data Scientist" OR "Decision Scientist")',
-  "ai-data-product": '("AI Product Manager" OR "data product lead" OR "AI platform lead")',
-  strategy: '("Strategy & Analytics" OR "Data Products Lead" OR "AI commercialization")',
-  "governance-risk": '("Responsible AI" OR "model validation" OR "algorithmic risk")',
-  "architecture-platform": '("business systems" OR "analytics enablement" OR "data enablement")',
-  "business-operator": '("Business Manager" OR "Founder\'s Office" OR "AI workflow")',
-  finserv: '(fintech OR payments OR credit OR banking OR insurance OR lending)',
+  analytics: '(manager OR director OR head OR lead OR principal OR senior)',
+  science: '(manager OR director OR head OR lead OR principal OR senior)',
+  "product-experimentation": '(manager OR director OR head OR lead OR principal OR senior)',
+  "marketing-customer": '(manager OR director OR head OR lead OR principal OR senior)',
+  "data-product": '(manager OR director OR head OR lead OR principal OR senior)',
+  strategy: '(manager OR director OR head OR lead OR principal OR senior)',
+  "ai-product-operator": '(manager OR director OR head OR lead OR principal OR senior OR operator)',
+  finserv: '(manager OR director OR head OR lead OR principal OR senior)',
 };
 
 export const QUERY_BUNDLES = buildBroadSearchShards().map((shard) => ({
@@ -58,10 +58,10 @@ export const QUERY_BUNDLES = buildBroadSearchShards().map((shard) => ({
 }));
 
 export const EXPLORATORY_QUERIES = [
-  '("decision intelligence" OR "commercialization" OR "AI enablement") (data OR analytics OR AI)',
-  '("founder\'s office" OR "chief of staff" OR "AI operator") (AI OR data OR analytics)',
-  '("experimentation" OR "measurement" OR "causal inference") (product OR growth OR marketplace)',
-  '("model governance" OR "AI operating model" OR "data ethics")',
+  '("conversion optimization" OR "lifecycle analytics" OR "retention analytics" OR "acquisition analytics") (manager OR lead OR director OR principal)',
+  '("customer decisioning" OR "marketing science" OR "commercial insights" OR "growth measurement") (manager OR lead OR director OR principal)',
+  '("experimentation" OR "measurement" OR "causal inference") (product OR growth OR marketplace) (manager OR lead OR director OR principal)',
+  '("AI enablement" OR "AI operating model" OR "data commercialization") (manager OR lead OR director OR principal)',
 ];
 
 const X_RAY_GROUPS = [
@@ -108,7 +108,7 @@ export function buildSearchPlan({ date = new Date(), exploratoryCount = 2 } = {}
     EXPLORATORY_QUERIES[(dayIndex + index) % EXPLORATORY_QUERIES.length]
   ));
   return {
-    version: "metadata-first-2026-07-13.v2",
+    version: "analytics-first-2026-07-14.v3",
     generatedAt: date.toISOString(),
     titleFamilies: TITLE_FAMILIES.map(({ id, label }) => ({ id, label })),
     portals: JOB_PORTALS,

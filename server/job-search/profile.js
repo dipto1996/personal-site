@@ -3,97 +3,86 @@ import { parseCsv } from "./utils.js";
 export const DEFAULT_OWNER_EMAILS = ["roydiptopal1996@gmail.com"];
 
 export const TARGET_PROFILE = {
-  version: "2026-07-10-fit-first-open-source",
-  headline: "AI product founder, data science and analytics leader, fintech/finserv operator",
+  version: "2026-07-14-analytics-first-v2",
+  headline: "Analytics, experimentation, product analytics, and data science leader; AI product founder",
   baseline:
     process.env.JOBSEARCH_CANDIDATE_BASELINE
-    || "Cornell Tech MBA and data/AI leader. Former American Express Manager, Data Science leading a five-person team and shipping decisioning, experimentation, and ML systems associated with $400M+ in financial impact, including $12M annual profit and a $430M experimentation program. AI product founder and operator with fintech and financial-services depth, production RAG, data architecture, model governance, 250+ deterministic rules, 32 agent workflows, and a 612-case evaluation suite. Targets AI product, product scientist, data/AI strategy, analytics leadership, business management, AI governance, AI operator, context engineering, and fintech/financial-services leadership. Avoids backend IC engineering and coding-interview-heavy tracks.",
+    || "Cornell Tech MBA and analytics/data-science leader with 8 years across American Express and zero-to-one startups. At American Express: Manager, Data Science leading five data scientists for US commercial retention; built churn, spend, forecasting, sentiment, marketing-treatment, gamer-suppression, and NPV models; drove $500M+ incremental billings and $12M annual profit. Previously led digital acquisition analytics, clickstream data products, conversion optimization, multivariate and A/B experimentation associated with $430M incremental acquisition revenue, forecasting, product analytics, KPI/funnel dashboards, and executive decision support. Core expertise is analytics leadership, experimentation, product and marketing analytics, customer/retention analytics, data-science management, strategy analytics, decision science, and data products. Additional differentiators are financial-services depth and founder/CTO experience shipping AI products, RAG, agent workflows, governance, evaluations, data pipelines, and data architecture. AI is an adjacency and future direction, not a prerequisite for role fit. Avoid backend/software-engineering IC roles and coding-interview-heavy tracks.",
+  coreExpertise: [
+    "analytics leadership and executive decision support",
+    "experimentation, A/B testing, multivariate testing, causal measurement, and conversion optimization",
+    "product analytics, growth analytics, KPI/funnel analytics, and customer behavior analytics",
+    "marketing, acquisition, retention, lifecycle, and commercial analytics",
+    "data-science management for predictive marketing and customer models",
+    "strategy analytics, business analytics, forecasting, and decision science",
+    "data products, clickstream data capabilities, and analytics platforms",
+    "cross-functional product strategy and zero-to-one product building",
+  ],
+  differentiators: [
+    "financial-services, cards, payments, credit, acquisition, and retention domain depth",
+    "AI/ML product strategy, RAG, agentic systems, evaluations, governance, and data architecture",
+    "people leadership, executive stakeholder management, and large measured financial impact",
+    "founder and operator experience across regulated technology and B2B ventures",
+  ],
   targetGeography:
-    "US roles plus global remote roles that can be continued from India; remote-from-India evidence is a strong bonus.",
+    "Prioritize US roles. Remote work is a minor convenience only, not a requirement and not a proxy for work authorization. Global remote roles that can employ the candidate are also acceptable.",
   compensation:
-    "Prefer 120k+ USD cash or credible high-equity upside. 200k+ base is excellent, but not a hard reject below that.",
+    "Required target is at least USD 170,000 annual base or clearly comparable guaranteed cash. USD 200,000+ base and additional equity are bonuses. Missing compensation requires research or manual review; it is never scored as zero merely because it is unknown.",
+  workAuthorization:
+    "Candidate is an F-1 STEM MBA graduate seeking employers that can employ F-1 OPT/STEM OPT talent and support future work authorization. Explicit no-current-or-future-sponsorship, citizenship, or clearance restrictions are blockers. Verified E-Verify participation and recent government H-1B/LCA history are positive employer-level evidence but do not override an explicit job-level restriction.",
+  hardRequirements: {
+    expertiseFit: "Primary responsibilities must substantially match the candidate's demonstrated analytics, experimentation, product analytics, marketing/customer data science, strategy analytics, data-product, or product-builder experience.",
+    workAuthorization: "The role must be compatible with F-1 OPT/STEM OPT and credible future sponsorship. Explicit incompatibility is a blocker; missing evidence requires review.",
+    compensation: "The listed or credibly researched annual base must reach USD 170,000. A confirmed maximum below USD 170,000 is a blocker; missing evidence requires review.",
+    codingInterview: "The hiring process must not require software-engineering-style coding, algorithms, data structures, or LeetCode interviews. Explicit coding rounds are blockers; missing interview evidence requires review or a clearly labelled inference.",
+  },
+  rankingWeights: {
+    expertiseFit: 35,
+    workAuthorization: 20,
+    compensation: 15,
+    codingInterviewSafety: 10,
+    leadershipScope: 5,
+    companyQuality: 4,
+    interviewVelocity: 3,
+    aiMlProductAdjacency: 3,
+    financialServicesAdvantage: 3,
+    remoteFlexibility: 2,
+  },
   desiredTitles: [
-    "AI Product Manager",
-    "AI Product Lead",
-    "GenAI Platform Lead",
-    "Product Scientist",
-    "Business Manager",
-    "AI Operator",
-    "Context Engineer",
     "Analytics Manager",
     "Senior Analytics Manager",
     "Director of Analytics",
+    "Head of Analytics",
+    "Data Science Manager",
+    "Manager of Data Science",
+    "Senior Manager, Data Science",
+    "Director of Data Science",
+    "Product Analytics Manager",
+    "Director of Product Analytics",
+    "Marketing Analytics Manager",
+    "Customer Analytics Manager",
+    "Commercial Analytics Manager",
+    "Experimentation Lead",
+    "Experimentation Manager",
+    "Decision Science Manager",
+    "Product Scientist",
+    "Data Product Manager",
+    "Data Products Lead",
+    "Strategy and Analytics Lead",
+    "Business Manager",
+    "AI Product Manager",
+    "AI Product Lead",
+    "GenAI Platform Lead",
+    "AI Operator",
+    "Context Engineer",
     "Data Strategy Director",
     "Head of Data",
     "AI Strategy Lead",
   ],
   avoid:
-    "Backend IC engineering, full-stack/front-end IC engineering, coding screens, LeetCode, data structures and algorithms, daily pager-duty services ownership.",
-  outreachIdentity: "AI product founder",
+    "Backend, full-stack, front-end, data-engineering, analytics-engineering, or ML-engineering IC roles whose primary function is production implementation; software-engineering coding screens; LeetCode; algorithms and data structures interviews; daily pager-duty services ownership. Python, SQL, statistics, or model-building in an analytics/data-science role are not by themselves disqualifying.",
+  outreachIdentity: "analytics and data-science leader and AI product founder",
 };
-
-export const ROLE_FAMILIES = [
-  {
-    id: "ai_product",
-    label: "AI product / GenAI platform",
-    patterns: [
-      /\bai product\b/i,
-      /\bgenai\b/i,
-      /\bllm\b/i,
-      /\brag\b/i,
-      /\bagentic\b/i,
-      /\bai platform\b/i,
-      /\bproduct lead\b/i,
-    ],
-  },
-  {
-    id: "product_science",
-    label: "Product science / experimentation",
-    patterns: [
-      /\bproduct scientist\b/i,
-      /\bexperimentation\b/i,
-      /\bcausal\b/i,
-      /\bmeasurement\b/i,
-      /\bgrowth analytics\b/i,
-    ],
-  },
-  {
-    id: "analytics_strategy",
-    label: "Analytics leadership / strategy",
-    patterns: [
-      /\banalytics manager\b/i,
-      /\bdirector of analytics\b/i,
-      /\bdata strategy\b/i,
-      /\bbusiness manager\b/i,
-      /\bstrategy\b/i,
-      /\boperating model\b/i,
-    ],
-  },
-  {
-    id: "data_architecture",
-    label: "Data architecture / governance",
-    patterns: [
-      /\bdata architecture\b/i,
-      /\bdata platform\b/i,
-      /\bgovernance\b/i,
-      /\bmodel risk\b/i,
-      /\bcontrols?\b/i,
-      /\bcompliance\b/i,
-    ],
-  },
-  {
-    id: "ai_operator",
-    label: "AI operator / startup operating role",
-    patterns: [
-      /\bai operator\b/i,
-      /\bfounder.?operator\b/i,
-      /\bchief of staff\b/i,
-      /\bcontext engineer\b/i,
-      /\bstartup\b/i,
-      /\bseries [abc]\b/i,
-    ],
-  },
-];
 
 export function ownerEmails() {
   const configured = parseCsv(process.env.JOBSEARCH_OWNER_EMAILS)

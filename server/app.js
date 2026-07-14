@@ -496,7 +496,13 @@ async function handleApi(request, response, url) {
 
   if (request.method === "GET" && url.pathname === "/api/job-search/jobs") {
     requireJobSearchAccess(sessionContext);
-    const payload = await getJobSearchDashboard({ view: url.searchParams.get("view") || "inbox" });
+    const payload = await getJobSearchDashboard({
+      view: url.searchParams.get("view") || "inbox",
+      page: url.searchParams.get("page") || 1,
+      pageSize: 10,
+      decisionSource: url.searchParams.get("decisionSource") || "all",
+      roleFamily: url.searchParams.get("roleFamily") || "all",
+    });
     sendJson(response, 200, payload);
     return true;
   }

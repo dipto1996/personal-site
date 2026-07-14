@@ -300,6 +300,18 @@ function inferCompanyFromUrl(url) {
   }
 }
 
+function jsonLdCompensation(baseSalary) {
+  if (!baseSalary) return "";
+  if (typeof baseSalary === "string" || typeof baseSalary === "number") return String(baseSalary);
+  const value = baseSalary.value || baseSalary;
+  const minimum = value.minValue ?? value.value ?? "";
+  const maximum = value.maxValue ?? value.value ?? "";
+  if (minimum === "" && maximum === "") return "";
+  const currency = baseSalary.currency || value.currency || "USD";
+  const unit = value.unitText || baseSalary.unitText || "YEAR";
+  return `${currency} ${minimum}${maximum !== "" && maximum !== minimum ? ` - ${maximum}` : ""} per ${String(unit).toLowerCase()}`;
+}
+
 async function fetchGenericJobPage(url, sourceQuery = "generic_page") {
   const response = await fetchWithTimeout(url, {
     headers: {
@@ -339,6 +351,7 @@ async function fetchGenericJobPage(url, sourceQuery = "generic_page") {
     url,
     location,
     postedAt: parseTimestamp(jsonLd?.datePosted || jsonLd?.validThrough),
+    compensation: jsonLdCompensation(jsonLd?.baseSalary),
     sourceQuery,
     sourceProvider: "generic_page",
     raw: {

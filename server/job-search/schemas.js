@@ -67,8 +67,17 @@ export const triageBatchSchema = z.object({
 });
 
 const dimensionSchema = z.object({
-  score: z.number().min(0).max(5),
+  score: z.number().min(0).max(5).nullable().default(null),
+  evidenceStatus: z.enum(["explicit", "inferred", "unknown"]).default("unknown"),
+  confidence: confidenceSchema.default(0),
   reasoning: z.string().min(1),
+});
+
+const mustHaveGateSchema = z.object({
+  status: z.enum(["met", "blocked", "unknown"]),
+  evidenceStatus: z.enum(["explicit", "inferred", "unknown"]).default("unknown"),
+  reasoning: z.string().min(1),
+  sourceUrl: z.string().url().or(z.literal("")).default(""),
 });
 
 export const deepEvaluationSchema = z.object({
@@ -76,15 +85,22 @@ export const deepEvaluationSchema = z.object({
   overallScore: z.number().min(0).max(100),
   summary: z.string().min(1),
   dimensions: z.object({
-    roleFit: dimensionSchema,
-    financialServicesAdvantage: dimensionSchema,
-    aiDataRelevance: dimensionSchema,
-    leadershipLevel: dimensionSchema,
-    codingInterviewRisk: dimensionSchema,
-    locationAuthorization: dimensionSchema,
-    compensationUpside: dimensionSchema,
+    expertiseFit: dimensionSchema,
+    workAuthorization: dimensionSchema,
+    compensation: dimensionSchema,
+    codingInterviewSafety: dimensionSchema,
+    leadershipScope: dimensionSchema,
     companyQuality: dimensionSchema,
     interviewVelocity: dimensionSchema,
+    aiMlProductAdjacency: dimensionSchema,
+    financialServicesAdvantage: dimensionSchema,
+    remoteFlexibility: dimensionSchema,
+  }),
+  mustHave: z.object({
+    expertiseFit: mustHaveGateSchema,
+    workAuthorization: mustHaveGateSchema,
+    compensation: mustHaveGateSchema,
+    codingInterview: mustHaveGateSchema,
   }),
   claims: z.array(evidenceSchema).max(30).default([]),
   redFlags: z.array(z.string()).max(10).default([]),

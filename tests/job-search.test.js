@@ -876,6 +876,18 @@ test("job cards preserve unknown eligibility and compensation instead of inventi
   assert.equal(facts.visa.status, "unknown");
 });
 
+test("job cards surface explicit cannot-consider-sponsorship language", () => {
+  const facts = cardFacts.buildJobCardFacts({
+    canonicalUrl: "https://example.com/jobs/2",
+    title: "Strategic Performance and Analytics Manager",
+    company: "San Bernardino County",
+    description: "San Bernardino County is not able to consider candidates who will require visa sponsorship at the time of application or in the future.",
+    details: {},
+  });
+  assert.equal(facts.visa.status, "not_available");
+  assert.equal(facts.visa.label, "Sponsorship not available");
+});
+
 test("Google Jobs URL selection prefers direct ATS links over aggregators", () => {
   const selected = providers.selectBestJobUrl({
     apply_options: [

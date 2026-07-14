@@ -393,19 +393,43 @@ async function ensureDatabaseSchema() {
   WHERE COALESCE(canonical_url, '') <> ''
   ON CONFLICT (dedupe_key) DO NOTHING`;
 
-  const seeded = await sql`SELECT COUNT(*)::int AS count FROM js_title_patterns`;
-  if (!seeded[0]?.count) {
-    const patterns = seedTitlePatterns();
-    for (const pattern of patterns) {
-      await sql`INSERT INTO js_title_patterns (
-        id, family_id, family_label, match_type, expression, status, source, version,
-        support_count, metrics, created_at, updated_at
-      ) VALUES (
-        ${pattern.id}, ${pattern.familyId}, ${pattern.familyLabel}, ${pattern.matchType},
-        ${pattern.expression}, ${pattern.status}, ${pattern.source}, ${pattern.version},
-        ${pattern.supportCount}, ${JSON.stringify(pattern.metrics)}, ${pattern.createdAt}, ${pattern.updatedAt}
-      ) ON CONFLICT DO NOTHING`;
-    }
+  await sql`WITH salary_snapshots AS (
+    SELECT DISTINCT ON (job_id)
+      job_id,
+      COALESCE(
+        NULLIF(raw #>> '{detected_extensions,salary}', ''),
+        NULLIF(raw #>> '{extensions,salary}', ''),
+        NULLIF(raw ->> 'compensation', '')
+      ) AS salary
+    FROM js_job_snapshots
+    WHERE COALESCE(
+      NULLIF(raw #>> '{detected_extensions,salary}', ''),
+      NULLIF(raw #>> '{extensions,salary}', ''),
+      NULLIF(raw ->> 'compensation', '')
+    ) IS NOT NULL
+    ORDER BY job_id, captured_at DESC
+  )
+  UPDATE js_jobs AS job
+  SET details = COALESCE(job.details, '{}'::jsonb) || jsonb_build_object(
+    'sourceMetadata',
+    COALESCE(job.details->'sourceMetadata', '{}'::jsonb) || jsonb_build_object('compensation', salary_snapshots.salary)
+  )
+  FROM salary_snapshots
+  WHERE job.id = salary_snapshots.job_id
+    AND COALESCE(job.details #>> '{sourceMetadata,compensation}', '') = ''`;
+
+  const patterns = seedTitlePatterns();
+  for (const pattern of patterns) {
+    await sql`INSERT INTO js_title_patterns (
+      id, family_id, family_label, match_type, expression, status, source, version,
+      support_count, metrics, created_at, updated_at
+    ) VALUES (
+      ${pattern.id}, ${pattern.familyId}, ${pattern.familyLabel}, ${pattern.matchType},
+      ${pattern.expression}, ${pattern.status}, ${pattern.source}, ${pattern.version},
+      ${pattern.supportCount}, ${JSON.stringify(pattern.metrics)}, ${pattern.createdAt}, ${pattern.updatedAt}
+    ) ON CONFLICT (id) DO UPDATE SET
+      family_label=EXCLUDED.family_label,
+      updated_at=CASE WHEN js_title_patterns.source='seed' THEN EXCLUDED.updated_at ELSE js_title_patterns.updated_at END`;
   }
 
   const migration = await sql`SELECT value FROM js_schema_meta WHERE key = 'legacy_import_v1'`;
@@ -641,6 +665,38 @@ export async function upsertJob(job) {
   return row;
 }
 
+export async function updateJobClassification(jobId, classification) {
+  await ensureJobSearchRepository();
+  const timestamp = nowIso();
+  if (!hasDatabase()) {
+    return mutateLocal((db) => {
+      const job = db.jobs.find((item) => item.id === jobId);
+      if (!job) return null;
+      job.normalizedTitle = classification.normalizedTitle;
+      job.roleFamilyId = classification.roleFamilyId;
+      job.details = {
+        ...(job.details || {}),
+        titleClassification: classification.titleClassification,
+      };
+      job.updatedAt = timestamp;
+      return structuredClone(job);
+    });
+  }
+  const sql = getSql();
+  const [row] = await sql`UPDATE js_jobs SET
+    normalized_title=${classification.normalizedTitle},
+    role_family_id=${classification.roleFamilyId},
+    details=jsonb_set(COALESCE(details, '{}'::jsonb), '{titleClassification}', ${JSON.stringify(classification.titleClassification)}::jsonb, true),
+    updated_at=${timestamp}
+    WHERE id=${jobId}
+    RETURNING id, source_id AS "sourceId", canonical_url AS "canonicalUrl", title,
+      normalized_title AS "normalizedTitle", company, location, description, posted_at AS "postedAt",
+      source_provider AS "sourceProvider", source_query AS "sourceQuery", content_hash AS "contentHash",
+      role_family_id AS "roleFamilyId", status, disposition, details, first_seen_at AS "firstSeenAt",
+      last_seen_at AS "lastSeenAt", created_at AS "createdAt", updated_at AS "updatedAt"`;
+  return row || null;
+}
+
 export async function getJob(jobId) {
   await ensureJobSearchRepository();
   if (!hasDatabase()) {
@@ -672,23 +728,35 @@ export async function getJobByCanonicalUrl(canonicalUrl) {
   return row || null;
 }
 
-export async function listJobs({ view = "inbox", limit = 500 } = {}) {
+function matchesJobView(job, view) {
+  if (job.sourceProvider === "sample") return false;
+  const triageRelevance = job.details?.triage?.relevance;
+  if (["all", "all_candidates"].includes(view)) return true;
+  if (view === "relevant") return triageRelevance === "relevant";
+  if (view === "uncertain") return triageRelevance === "uncertain";
+  if (view === "clear_mismatch") return triageRelevance === "irrelevant" || job.status === "triage_rejected";
+  if (view === "shortlist") return job.status === "shortlisted" || job.disposition === "apply";
+  if (view === "needs_review") return ["needs_review", "deep_review_pending", "triage_pending", "local_triage_pending"].includes(job.status) || job.disposition === "maybe";
+  if (view === "passed") return ["passed", "triage_rejected"].includes(job.status) || job.disposition === "pass";
+  if (view === "expired") return job.status === "expired";
+  return !["passed", "expired"].includes(job.status) && job.disposition !== "pass";
+}
+
+function matchesDecisionSource(job, decisionSource) {
+  if (decisionSource === "owner") return Boolean(job.disposition);
+  if (decisionSource === "model") return !job.disposition;
+  return true;
+}
+
+export async function listJobs({ view = "inbox", limit = 500, offset = 0, decisionSource = "all", roleFamily = "all" } = {}) {
   await ensureJobSearchRepository();
-  const filter = (job) => {
-    if (job.sourceProvider === "sample") return false;
-    const triageRelevance = job.details?.triage?.relevance;
-    if (["all", "all_candidates"].includes(view)) return true;
-    if (view === "relevant") return triageRelevance === "relevant";
-    if (view === "uncertain") return triageRelevance === "uncertain";
-    if (view === "clear_mismatch") return triageRelevance === "irrelevant" || job.status === "triage_rejected";
-    if (view === "shortlist") return job.status === "shortlisted" || job.disposition === "apply";
-    if (view === "needs_review") return ["needs_review", "deep_review_pending", "triage_pending", "local_triage_pending"].includes(job.status) || job.disposition === "maybe";
-    if (view === "passed") return ["passed", "triage_rejected"].includes(job.status) || job.disposition === "pass";
-    if (view === "expired") return job.status === "expired";
-    return !["passed", "expired"].includes(job.status) && job.disposition !== "pass";
-  };
+  const filter = (job) => matchesJobView(job, view)
+    && matchesDecisionSource(job, decisionSource)
+    && (roleFamily === "all" || job.roleFamilyId === roleFamily);
+  const boundedLimit = Math.max(0, Math.min(5000, Number(limit) || 500));
+  const boundedOffset = Math.max(0, Number(offset) || 0);
   if (!hasDatabase()) {
-    return (await readLocal()).jobs.filter(filter).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
+    return (await readLocal()).jobs.filter(filter).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(boundedOffset, boundedOffset + boundedLimit);
   }
   const sql = getSql();
   const rows = await sql`SELECT id, source_id AS "sourceId", canonical_url AS "canonicalUrl", title,
@@ -696,8 +764,8 @@ export async function listJobs({ view = "inbox", limit = 500 } = {}) {
     source_provider AS "sourceProvider", source_query AS "sourceQuery", content_hash AS "contentHash",
     role_family_id AS "roleFamilyId", status, disposition, details, first_seen_at AS "firstSeenAt",
     last_seen_at AS "lastSeenAt", created_at AS "createdAt", updated_at AS "updatedAt"
-    FROM js_jobs ORDER BY updated_at DESC LIMIT ${limit}`;
-  return rows.filter(filter);
+    FROM js_jobs ORDER BY updated_at DESC LIMIT 5000`;
+  return rows.filter(filter).slice(boundedOffset, boundedOffset + boundedLimit);
 }
 
 export async function upsertDiscoveryLead(lead) {
@@ -1691,10 +1759,16 @@ export async function writeResearchCache({ cacheKey, company, topic, result, ttl
   return record;
 }
 
-export async function getRepositoryDashboard(view = "inbox") {
-  const [jobs, runs, patterns, usage, calibration, rawLeads, localProcessing] = await Promise.all([
-    listJobs({ view }),
-    listRuns(20),
+export async function getRepositoryDashboard(input = "inbox") {
+  const options = typeof input === "string" ? { view: input } : (input || {});
+  const view = options.view || "inbox";
+  const pageSize = Math.max(1, Math.min(10, Number(options.pageSize) || 10));
+  const page = Math.max(1, Number(options.page) || 1);
+  const decisionSource = ["owner", "model"].includes(options.decisionSource) ? options.decisionSource : "all";
+  const roleFamily = String(options.roleFamily || "all");
+  const [allJobs, runs, patterns, usage, calibration, rawLeads, localProcessing] = await Promise.all([
+    listJobs({ view: "all", limit: 5000 }),
+    listRuns(500),
     listTitlePatterns(),
     getUsageSummary(),
     getCalibrationStatus(),
@@ -1702,18 +1776,77 @@ export async function getRepositoryDashboard(view = "inbox") {
     getLocalWorkerStatus(),
   ]);
   const leads = rawLeads.filter((lead) => lead.sourceProvider !== "sample");
-  const allJobs = await listJobs({ view: "all", limit: 1000 });
+  const filteredJobs = allJobs.filter((job) => matchesJobView(job, view)
+    && matchesDecisionSource(job, decisionSource)
+    && (roleFamily === "all" || job.roleFamilyId === roleFamily));
+  const filteredLeads = view === "discovery" ? leads : [];
+  const orderedPatterns = view === "taxonomy"
+    ? [...patterns.filter((pattern) => pattern.status === "proposed"), ...patterns.filter((pattern) => pattern.status === "active")]
+    : [];
+  const viewItems = view === "discovery" ? filteredLeads
+    : view === "taxonomy" ? orderedPatterns
+      : view === "runs" ? runs
+        : filteredJobs;
+  const totalPages = Math.max(1, Math.ceil(viewItems.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const offset = (currentPage - 1) * pageSize;
+  const pagedItems = viewItems.slice(offset, offset + pageSize);
+  const viewDecisionCounts = view === "discovery" || view === "taxonomy" || view === "runs" ? null : {
+    all: allJobs.filter((job) => matchesJobView(job, view) && (roleFamily === "all" || job.roleFamilyId === roleFamily)).length,
+    owner: allJobs.filter((job) => matchesJobView(job, view) && Boolean(job.disposition) && (roleFamily === "all" || job.roleFamilyId === roleFamily)).length,
+    model: allJobs.filter((job) => matchesJobView(job, view) && !job.disposition && (roleFamily === "all" || job.roleFamilyId === roleFamily)).length,
+  };
+  const roleFamilies = [...new Map(allJobs.map((job) => [job.roleFamilyId || "exploratory", {
+    id: job.roleFamilyId || "exploratory",
+    label: job.details?.titleClassification?.familyLabel || job.roleFamilyId || "Exploratory",
+  }])).values()]
+    .map((family) => ({
+      ...family,
+      count: allJobs.filter((job) => matchesJobView(job, view) && (job.roleFamilyId || "exploratory") === family.id).length,
+    }))
+    .filter((family) => family.count > 0)
+    .sort((left, right) => left.label.localeCompare(right.label));
+  const tabCounts = {
+    discovery: leads.length,
+    all_candidates: allJobs.length,
+    relevant: allJobs.filter((job) => matchesJobView(job, "relevant")).length,
+    uncertain: allJobs.filter((job) => matchesJobView(job, "uncertain")).length,
+    clear_mismatch: allJobs.filter((job) => matchesJobView(job, "clear_mismatch")).length,
+    shortlist: allJobs.filter((job) => matchesJobView(job, "shortlist")).length,
+    needs_review: allJobs.filter((job) => matchesJobView(job, "needs_review")).length,
+    passed: allJobs.filter((job) => matchesJobView(job, "passed")).length,
+    expired: allJobs.filter((job) => matchesJobView(job, "expired")).length,
+    taxonomy: patterns.filter((pattern) => ["active", "proposed"].includes(pattern.status)).length,
+    runs: runs.length,
+  };
   return {
-    jobs,
-    runs,
+    jobs: ["discovery", "taxonomy", "runs"].includes(view) ? [] : pagedItems,
+    runs: view === "runs" ? pagedItems : [],
     taxonomy: {
-      active: patterns.filter((pattern) => pattern.status === "active"),
-      proposed: patterns.filter((pattern) => pattern.status === "proposed"),
+      active: view === "taxonomy" ? pagedItems.filter((pattern) => pattern.status === "active") : [],
+      proposed: view === "taxonomy" ? pagedItems.filter((pattern) => pattern.status === "proposed") : [],
       rejected: patterns.filter((pattern) => pattern.status === "rejected"),
+      totals: {
+        active: patterns.filter((pattern) => pattern.status === "active").length,
+        proposed: patterns.filter((pattern) => pattern.status === "proposed").length,
+      },
     },
     usage,
     localProcessing,
-    discoveryLeads: view === "discovery" ? leads.slice(0, 1000) : [],
+    discoveryLeads: view === "discovery" ? pagedItems : [],
+    pagination: {
+      page: currentPage,
+      pageSize,
+      total: viewItems.length,
+      totalPages,
+    },
+    filters: {
+      decisionSource,
+      roleFamily,
+      decisionCounts: viewDecisionCounts,
+      roleFamilies,
+    },
+    tabCounts,
     summary: {
       total: allJobs.length,
       rawLeads: leads.length,

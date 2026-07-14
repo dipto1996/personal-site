@@ -10,7 +10,7 @@ const VISA_PATTERNS = [
   {
     status: "not_available",
     label: "Sponsorship not available",
-    pattern: /\b(?:no|not eligible for|unable to (?:offer|provide)|cannot (?:offer|provide)|does not (?:offer|provide)|will not (?:offer|provide)?|must not require)\s+(?:employment\s+|immigration\s+|visa\s+)?sponsor(?:ship|ing)?\b|\bwithout (?:current or future |now or in the future )?(?:visa )?sponsorship\b/i,
+    pattern: /\b(?:not able to consider|unable to consider|will not consider|cannot consider|do not consider|does not consider)[^.]{0,120}(?:visa\s+)?sponsor(?:ship|ing)?\b|\b(?:no|not eligible for|unable to (?:offer|provide)|cannot (?:offer|provide)|does not (?:offer|provide)|will not (?:offer|provide)?|must not require)\s+(?:employment\s+|immigration\s+|visa\s+)?sponsor(?:ship|ing)?\b|\bwithout (?:current or future |now or in the future )?(?:visa )?sponsorship\b/i,
   },
   {
     status: "citizenship_required",
@@ -97,10 +97,23 @@ export function buildJobCardFacts(job) {
   const url = clean(job.canonicalUrl || job.url || sourceEvidenceUrl);
   const company = clean(job.company);
   const description = clean(job.description);
+  const structuredCompensation = clean(job.details?.sourceMetadata?.compensation);
 
-  const compensationClaim = claimFor(claims, /(compensation|salary|base_pay|pay_range)/i);
+  const candidateCompensationClaim = claimFor(claims, /(compensation|salary|base_pay|pay_range)/i);
+  const compensationClaim = candidateCompensationClaim
+    && !/^(not (specified|listed|available)|unknown|n\/?a)$/i.test(clean(candidateCompensationClaim.value))
+    && (findPatternEvidence(`${candidateCompensationClaim.value} ${candidateCompensationClaim.supportingPassage || ""}`, COMPENSATION_PATTERNS)
+      || /\b(equity|stock|rsu|bonus)\b/i.test(`${candidateCompensationClaim.value} ${candidateCompensationClaim.supportingPassage || ""}`))
+    ? candidateCompensationClaim
+    : null;
   const compensationMatch = findPatternEvidence(description, COMPENSATION_PATTERNS);
-  const compensation = compensationClaim ? {
+  const compensation = structuredCompensation ? {
+    status: "listed",
+    label: structuredCompensation,
+    evidence: structuredCompensation,
+    evidenceType: "explicit",
+    sourceUrl: url,
+  } : compensationClaim ? {
     status: "listed",
     label: clean(compensationClaim.value),
     evidence: clean(compensationClaim.supportingPassage || compensationClaim.value),

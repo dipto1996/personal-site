@@ -79,6 +79,11 @@ export async function searchSerpApiJobs(querySpec, { runId } = {}) {
     description: compact(job.description, 24000),
     location: compact(job.location, 300),
     postedAt: job.detected_extensions?.posted_at || job.extensions?.find((value) => /ago|today/i.test(value)) || null,
+    compensation: compact(
+      job.detected_extensions?.salary
+      || job.extensions?.find((value) => /(?:\$|usd|salary|compensation|pay).*(?:year|annual|hour)|\d[\d,.]*\s*[-–—]\s*\d[\d,.]*\s*(?:a year|annually|per year)/i.test(value)),
+      300,
+    ),
     url: selectBestJobUrl(job),
     sourceProvider: "serpapi_google_jobs",
     sourceQuery: querySpec.id,

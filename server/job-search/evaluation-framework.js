@@ -1,0 +1,351 @@
+import { TARGET_PROFILE } from "./profile.js";
+import { classifyCandidateTitle } from "./title-ontology.js";
+
+export const EVALUATION_FRAMEWORK_VERSION = "analytics-first-gates-2026-07-v2";
+
+export const EVALUATION_WEIGHTS = Object.freeze({ ...TARGET_PROFILE.rankingWeights });
+
+export const DIMENSION_LABELS = Object.freeze({
+  expertiseFit: "Expertise fit",
+  workAuthorization: "Visa / OPT compatibility",
+  compensation: "Compensation",
+  codingInterviewSafety: "No-coding-interview confidence",
+  leadershipScope: "Leadership and scope",
+  companyQuality: "Company quality",
+  interviewVelocity: "Interview velocity",
+  aiMlProductAdjacency: "AI / ML product adjacency",
+  financialServicesAdvantage: "Financial-services advantage",
+  remoteFlexibility: "Remote flexibility",
+});
+
+const LEGACY_DIMENSIONS = Object.freeze({
+  roleFit: "expertiseFit",
+  locationAuthorization: "workAuthorization",
+  compensationUpside: "compensation",
+  codingInterviewRisk: "codingInterviewSafety",
+  leadershipLevel: "leadershipScope",
+  aiDataRelevance: "aiMlProductAdjacency",
+});
+
+const BLOCKED_SPONSORSHIP = /\b(?:not able to consider|unable to consider|will not consider|cannot consider|do not consider|does not consider|no|not eligible for|unable to (?:offer|provide)|cannot (?:offer|provide)|does not (?:offer|provide)|will not (?:offer|provide))[^.]{0,100}(?:visa\s+)?sponsor(?:ship|ing)?\b|\bwithout (?:current or future |now or in the future )?(?:visa )?sponsorship\b/i;
+const CITIZENSHIP_BLOCK = /\b(?:u\.?s\.? citizen(?:ship)? required|must be (?:a )?u\.?s\.? citizen|security clearance required|active security clearance)\b/i;
+const SPONSORSHIP_AVAILABLE = /\b(?:visa sponsorship (?:is )?available|sponsorship available|will (?:provide|offer) (?:visa )?sponsorship|we sponsor|eligible for sponsorship|F-1 OPT|STEM OPT|CPT)\b/i;
+const EVERIFY_HISTORY = /\bE-Verify\b/i;
+const SPONSORSHIP_HISTORY = /\b(?:H-1B employer data|H-1B petitions?|certified LCA|LCA disclosure)\b/i;
+const CODING_INTERVIEW_BLOCK = /\b(?:leetcode|data structures and algorithms|algorithms and data structures|live coding|coding (?:challenge|screen|assessment|interview|round))\b/i;
+const NO_CODING_INTERVIEW = /\b(?:no|without) (?:live )?coding\b|\bno (?:leetcode|coding (?:challenge|screen|assessment|interview|round))\b/i;
+const ENGINEERING_TITLE = /\b(?:software|backend|front[ -]?end|full[ -]?stack|infrastructure|site reliability|data|analytics|machine learning|ml) engineer(?:ing)?\b|\bdeveloper\b/i;
+
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function clean(value) {
+  return String(value || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function normalizeDimension(value, fallbackReason = "Evidence not established.") {
+  const numeric = value?.score === null || value?.score === undefined || value?.score === ""
+    ? null
+    : Number(value.score);
+  return {
+    score: Number.isFinite(numeric) ? Math.round(clamp(numeric, 0, 5) * 10) / 10 : null,
+    evidenceStatus: ["explicit", "inferred", "unknown"].includes(value?.evidenceStatus)
+      ? value.evidenceStatus
+      : "unknown",
+    confidence: Number.isFinite(Number(value?.confidence)) ? clamp(Number(value.confidence), 0, 1) : 0,
+    reasoning: clean(value?.reasoning) || fallbackReason,
+  };
+}
+
+function normalizeDimensions(input = {}) {
+  const mapped = { ...input };
+  for (const [legacy, current] of Object.entries(LEGACY_DIMENSIONS)) {
+    if (!mapped[current] && mapped[legacy]) mapped[current] = mapped[legacy];
+  }
+  return Object.fromEntries(Object.keys(EVALUATION_WEIGHTS).map((key) => [key, normalizeDimension(mapped[key])]));
+}
+
+function numericSalary(value, suffix = "") {
+  const parsed = Number.parseFloat(String(value || "").replaceAll(",", ""));
+  if (!Number.isFinite(parsed)) return null;
+  if (/k/i.test(suffix) || parsed > 0 && parsed < 1000) return Math.round(parsed * 1000);
+  return Math.round(parsed);
+}
+
+export function parseAnnualCompensation(value) {
+  const text = clean(value);
+  if (!text) return null;
+  const range = text.match(/(?:USD\s*)?\$?\s*(\d{2,3}(?:,\d{3})*(?:\.\d+)?)\s*([kK]?)\s*(?:-|–|—|to)\s*(?:USD\s*)?\$?\s*(\d{2,3}(?:,\d{3})*(?:\.\d+)?)\s*([kK]?)/i);
+  const single = !range && text.match(/(?:USD\s*|\$\s*)(\d{2,3}(?:,\d{3})*(?:\.\d+)?)\s*([kK]?)/i);
+  if (!range && !single) return null;
+  let minimum = numericSalary(range?.[1] || single?.[1], range?.[2] || single?.[2]);
+  let maximum = numericSalary(range?.[3] || range?.[1] || single?.[1], range?.[4] || range?.[2] || single?.[2]);
+  if (!minimum || !maximum) return null;
+  const hourly = /(?:per|\/|a)\s*(?:hour|hr)\b/i.test(text);
+  if (hourly) {
+    minimum = Math.round(minimum * 2080);
+    maximum = Math.round(maximum * 2080);
+  }
+  return { minimum: Math.min(minimum, maximum), maximum: Math.max(minimum, maximum), text, hourly };
+}
+
+function relevantClaims(job, pattern) {
+  return [...(job?.details?.sourceEvidence || []), ...(job?.details?.claims || [])]
+    .filter((claim) => pattern.test(clean(claim?.claimType)))
+    .map((claim) => ({
+      text: clean(`${claim.value || ""} ${claim.supportingPassage || ""}`),
+      sourceUrl: claim.sourceUrl || job?.canonicalUrl || "",
+      evidenceType: claim.evidenceType || "inferred",
+    }));
+}
+
+function researchEvidence(job) {
+  return (job?.details?.research?.results || []).map((item) => ({
+    text: clean(`${item.title || ""} ${item.description || ""}`),
+    sourceUrl: item.url || "",
+    evidenceType: "inferred",
+  }));
+}
+
+function employerEvidence(job) {
+  return (job?.details?.employerEligibilityEvidence || []).map((item) => ({
+    text: clean(`${item.company || ""} ${item.value || ""} ${item.supportingPassage || ""}`),
+    sourceUrl: item.sourceUrl || "",
+    evidenceType: "inferred",
+  }));
+}
+
+function normalizedCompanyTokens(company) {
+  return clean(company).toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)
+    .filter((token) => token.length >= 3 && !["the", "inc", "llc", "ltd", "corp", "corporation", "company", "group", "holdings"].includes(token));
+}
+
+function evidenceNamesCompany(item, company) {
+  const text = clean(item?.text).toLowerCase().replace(/[^a-z0-9 ]+/g, " ");
+  const tokens = normalizedCompanyTokens(company);
+  if (!tokens.length) return false;
+  return tokens.length === 1 ? text.includes(tokens[0]) : tokens.filter((token) => text.includes(token)).length >= Math.min(2, tokens.length);
+}
+
+function officialEligibilitySource(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "dol.gov" || host.endsWith(".dol.gov")
+      || host === "uscis.gov" || host.endsWith(".uscis.gov")
+      || host === "e-verify.gov" || host.endsWith(".e-verify.gov")
+      || host === "dhs.gov" || host.endsWith(".dhs.gov");
+  } catch {
+    return false;
+  }
+}
+
+function compensationEvidence(job) {
+  const structured = clean(job?.details?.sourceMetadata?.compensation);
+  const candidates = [
+    ...(structured ? [{ text: structured, sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" }] : []),
+    ...relevantClaims(job, /(compensation|salary|base_pay|pay_range)/i),
+  ];
+  const description = clean(job?.description);
+  const salarySentence = description.match(/[^.!?]{0,100}\b(?:salary|compensation|base pay|pay range)\b[^.!?]{0,220}/i)?.[0];
+  if (salarySentence) candidates.push({ text: salarySentence, sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" });
+  candidates.push(...researchEvidence(job).filter((item) => /salary|compensation|pay range|\$\s*\d/i.test(item.text)));
+  for (const candidate of candidates) {
+    const parsed = parseAnnualCompensation(candidate.text);
+    if (parsed) return { ...parsed, ...candidate };
+  }
+  return null;
+}
+
+function authorizationEvidence(job) {
+  const posting = { text: clean(job?.description), sourceUrl: job?.canonicalUrl || "", evidenceType: "explicit" };
+  const claims = relevantClaims(job, /(visa|sponsor|work_authorization|immigration|citizenship|clearance|h1b|opt|everify)/i);
+  const research = [...employerEvidence(job), ...researchEvidence(job)];
+  const candidates = [posting, ...claims, ...research];
+  const blocked = candidates.find((item) => BLOCKED_SPONSORSHIP.test(item.text) || CITIZENSHIP_BLOCK.test(item.text));
+  if (blocked) return {
+    status: "blocked",
+    evidenceStatus: blocked.evidenceType,
+    reason: CITIZENSHIP_BLOCK.test(blocked.text)
+      ? "The posting requires citizenship or security clearance."
+      : "The posting explicitly excludes candidates requiring current or future visa sponsorship.",
+    sourceUrl: blocked.sourceUrl,
+  };
+  const available = candidates.find((item) => SPONSORSHIP_AVAILABLE.test(item.text));
+  if (available) return {
+    status: "met",
+    evidenceStatus: available.evidenceType,
+    reason: "The supplied evidence explicitly indicates sponsorship or F-1 OPT/STEM OPT compatibility.",
+    sourceUrl: available.sourceUrl,
+  };
+  const employerHistory = research.filter((item) => officialEligibilitySource(item.sourceUrl) && evidenceNamesCompany(item, job?.company));
+  const everify = employerHistory.find((item) => EVERIFY_HISTORY.test(item.text));
+  const sponsorship = employerHistory.find((item) => SPONSORSHIP_HISTORY.test(item.text));
+  if (everify && sponsorship) return {
+    status: "met",
+    evidenceStatus: "inferred",
+    reason: "Official employer-level evidence indicates both E-Verify participation and recent H-1B/LCA activity; the job itself does not contradict it.",
+    sourceUrl: sponsorship.sourceUrl,
+  };
+  if (everify || sponsorship) return {
+    status: "unknown",
+    evidenceStatus: "inferred",
+    reason: everify
+      ? "Official evidence indicates E-Verify participation, but future sponsorship history is not yet established."
+      : "Official evidence indicates H-1B/LCA history, but E-Verify participation for STEM OPT is not yet established.",
+    sourceUrl: (everify || sponsorship).sourceUrl,
+  };
+  return { status: "unknown", evidenceStatus: "unknown", reason: "F-1 OPT/STEM OPT and future sponsorship compatibility are not yet verified.", sourceUrl: "" };
+}
+
+function deterministicCodingEvidence(job) {
+  const text = clean(`${job?.title || ""} ${job?.description || ""}`);
+  if (CODING_INTERVIEW_BLOCK.test(text) && !NO_CODING_INTERVIEW.test(text)) {
+    return { status: "blocked", evidenceStatus: "explicit", reason: "The supplied job evidence explicitly mentions a coding, algorithms, or LeetCode-style interview." };
+  }
+  if (NO_CODING_INTERVIEW.test(text)) {
+    return { status: "met", evidenceStatus: "explicit", reason: "The supplied evidence explicitly states that no coding interview is required." };
+  }
+  const ontology = classifyCandidateTitle(job?.title || "");
+  if (ENGINEERING_TITLE.test(job?.title || "") && ontology.excludedConcepts?.length && !ontology.eligible) {
+    return { status: "blocked", evidenceStatus: "explicit", reason: "The title is primarily an engineering implementation role with high coding-interview risk." };
+  }
+  return null;
+}
+
+function normalizeGate(value, fallbackReason) {
+  return {
+    status: ["met", "blocked", "unknown"].includes(value?.status) ? value.status : "unknown",
+    evidenceStatus: ["explicit", "inferred", "unknown"].includes(value?.evidenceStatus) ? value.evidenceStatus : "unknown",
+    reasoning: clean(value?.reasoning || value?.reason) || fallbackReason,
+    sourceUrl: value?.sourceUrl || "",
+  };
+}
+
+function compensationGate(job) {
+  const evidence = compensationEvidence(job);
+  if (!evidence) return normalizeGate(null, "Annual base compensation is not verified.");
+  const formattedMinimum = `$${Math.round(evidence.minimum).toLocaleString("en-US")}`;
+  const formattedMaximum = `$${Math.round(evidence.maximum).toLocaleString("en-US")}`;
+  if (evidence.maximum < 170000) {
+    return normalizeGate({
+      status: "blocked",
+      evidenceStatus: evidence.evidenceType,
+      reason: `The confirmed salary range tops out at ${formattedMaximum}, below the $170,000 minimum.`,
+      sourceUrl: evidence.sourceUrl,
+    });
+  }
+  if (evidence.minimum < 170000) {
+    return normalizeGate({
+      status: "unknown",
+      evidenceStatus: evidence.evidenceType,
+      reason: `The confirmed range is ${formattedMinimum}-${formattedMaximum}; it spans the $170,000 threshold, so an offer above the minimum is not established.`,
+      sourceUrl: evidence.sourceUrl,
+    });
+  }
+  return normalizeGate({
+    status: "met",
+    evidenceStatus: evidence.evidenceType,
+    reason: `The confirmed salary range starts at ${formattedMinimum}, meeting the $170,000 minimum.`,
+    sourceUrl: evidence.sourceUrl,
+  });
+}
+
+function expertiseGate(job, dimensions, modelGate) {
+  const score = dimensions.expertiseFit.score;
+  const ontology = classifyCandidateTitle(job?.title || "");
+  if (ontology.excludedConcepts?.length && !ontology.eligible) {
+    return normalizeGate({ status: "blocked", evidenceStatus: "explicit", reason: "The primary function is an excluded engineering implementation track." });
+  }
+  if (score !== null && score < 2.5) {
+    return normalizeGate({ status: "blocked", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning });
+  }
+  if (score !== null && score >= 2.5) {
+    return normalizeGate({ status: "met", evidenceStatus: modelGate?.evidenceStatus || "inferred", reason: dimensions.expertiseFit.reasoning });
+  }
+  if (ontology.eligible) {
+    return normalizeGate({ status: "met", evidenceStatus: "inferred", reason: "The title matches the required function-and-seniority routing rules; responsibility-level fit still needs confirmation." });
+  }
+  return normalizeGate(modelGate, "Primary-function fit is not yet established.");
+}
+
+function applyGateScores(dimensions, gates, compensation) {
+  const updated = structuredClone(dimensions);
+  const gateDimension = {
+    workAuthorization: gates.workAuthorization,
+    compensation: gates.compensation,
+    codingInterviewSafety: gates.codingInterview,
+  };
+  for (const [key, gate] of Object.entries(gateDimension)) {
+    if (gate.status === "blocked") updated[key] = { score: 0, evidenceStatus: gate.evidenceStatus, confidence: 1, reasoning: gate.reasoning };
+    if (gate.status === "met" && updated[key].score === null) updated[key] = { score: 4, evidenceStatus: gate.evidenceStatus, confidence: gate.evidenceStatus === "explicit" ? 1 : 0.75, reasoning: gate.reasoning };
+  }
+  if (compensation && gates.compensation.status === "met") {
+    const score = compensation.minimum >= 200000 ? 5 : compensation.minimum >= 170000 ? 4.5 : 3.5;
+    updated.compensation = { score, evidenceStatus: compensation.evidenceType, confidence: 1, reasoning: gates.compensation.reasoning };
+  }
+  return updated;
+}
+
+function weightedScore(dimensions) {
+  return Math.round(Object.entries(EVALUATION_WEIGHTS).reduce((sum, [key, weight]) => {
+    const score = dimensions[key]?.score;
+    return sum + (score === null ? 2.5 : score) / 5 * weight;
+  }, 0));
+}
+
+function fitPhrase(score) {
+  if (score === null) return "Role fit is not yet established";
+  if (score >= 4) return "The role is a strong match for your analytics and experimentation background";
+  if (score >= 3) return "The role has a substantive match to your analytics, strategy, and leadership experience";
+  if (score >= 2.5) return "The role has a partial but credible match to your prior experience";
+  return "The role is outside your core demonstrated expertise";
+}
+
+function decisionSummary(verdict, dimensions, gates) {
+  const fit = fitPhrase(dimensions.expertiseFit.score);
+  const blockers = Object.values(gates).filter((gate) => gate.status === "blocked").map((gate) => gate.reasoning);
+  const unknowns = Object.values(gates).filter((gate) => gate.status === "unknown").map((gate) => gate.reasoning);
+  if (verdict === "pass") return `Pass: ${fit}. However, ${blockers.join(" ")}`.slice(0, 900);
+  if (verdict === "maybe") return `Review: ${fit}. ${unknowns.join(" ")}`.slice(0, 900);
+  return `Pursue: ${fit}. All four must-have gates are supported by the available evidence.`;
+}
+
+export function finalizeDeepEvaluation(job, modelEvaluation) {
+  const dimensions = normalizeDimensions(modelEvaluation?.dimensions || {});
+  const modelGates = modelEvaluation?.mustHave || {};
+  const compensation = compensationEvidence(job);
+  const workAuthorization = normalizeGate(authorizationEvidence(job), "Work authorization is not verified.");
+  const compensationRequirement = compensationGate(job);
+  const codingEvidence = deterministicCodingEvidence(job);
+  const codingInterview = normalizeGate(codingEvidence || modelGates.codingInterview, "Coding-interview format is not verified.");
+  const gates = {
+    expertiseFit: expertiseGate(job, dimensions, modelGates.expertiseFit),
+    workAuthorization,
+    compensation: compensationRequirement,
+    codingInterview,
+  };
+  const scoredDimensions = applyGateScores(dimensions, gates, compensation);
+  const blockers = Object.entries(gates).filter(([, gate]) => gate.status === "blocked").map(([key]) => key);
+  const unknowns = Object.entries(gates).filter(([, gate]) => gate.status === "unknown").map(([key]) => key);
+  const overallScore = weightedScore(scoredDimensions);
+  const verdict = blockers.length ? "pass" : unknowns.length ? "maybe" : overallScore >= 65 ? "apply" : "maybe";
+  return {
+    ...modelEvaluation,
+    modelVerdict: modelEvaluation?.verdict || null,
+    modelOverallScore: modelEvaluation?.overallScore ?? null,
+    modelSummary: clean(modelEvaluation?.summary),
+    verdict,
+    overallScore,
+    summary: decisionSummary(verdict, scoredDimensions, gates),
+    dimensions: scoredDimensions,
+    mustHave: gates,
+    decision: {
+      frameworkVersion: EVALUATION_FRAMEWORK_VERSION,
+      weights: EVALUATION_WEIGHTS,
+      blockers,
+      unknowns,
+      provisional: unknowns.length > 0,
+    },
+  };
+}

@@ -13,10 +13,10 @@ function formatDate(value) {
 
 function statusLabel(value) {
   const labels = {
-    local_triage_pending: "Waiting for Mac triage",
-    deep_review_pending: "Waiting for Mac deep review",
+    local_triage_pending: "Waiting for Windows triage",
+    deep_review_pending: "Waiting for Windows deep review",
     critic_pending: "Waiting for critic review",
-    queued_local: "Queued for Mac",
+    queued_local: "Queued for Windows",
   };
   if (labels[value]) return labels[value];
   return String(value || "unknown").replaceAll("_", " ");
@@ -77,7 +77,7 @@ function renderBudget(usage = {}) {
   const quotas = usage.freeQuotas || {};
   const quotaCards = Object.entries(quotas).map(([provider, quota]) => {
     if (provider === "local") {
-      return `<article class="job-free-quota"><div><span>Local Qwen</span><strong>${quota.configured ? "unlimited" : "waiting for Mac"}</strong></div><small>$0 inference Â· ${escapeHtml(quota.model || "qwen3-14b")}</small></article>`;
+      return `<article class="job-free-quota"><div><span>Windows Qwen</span><strong>${quota.configured ? "unlimited" : "worker status below"}</strong></div><small>$0 inference &middot; ${escapeHtml(quota.model || "Qwen")}</small></article>`;
     }
     const isCloudflare = provider === "cloudflare";
     const used = isCloudflare ? Number(quota.neurons || 0) : Number(quota.requests || 0);
@@ -90,15 +90,17 @@ function renderBudget(usage = {}) {
   return `<section class="job-budget" aria-label="Monthly job-search budget">
     <div class="job-budget-head"><div><span>Monthly API spend</span><strong>$${spent.toFixed(2)} / $${budget.toFixed(2)}</strong></div><span>${escapeHtml(usage.month || "Current month")}</span></div>
     <div class="job-budget-track"><span style="width:${percent.toFixed(1)}%"></span></div>
-    <div class="job-budget-providers">${providers.length ? providers.map(([name, value]) => `<span>${escapeHtml(name)}: ${Number(value.requests || 0)} calls Â· $${Number(value.costUsd || 0).toFixed(2)}</span>`).join("") : "<span>No metered usage yet</span>"}</div>
+    <div class="job-budget-providers">${providers.length ? providers.map(([name, value]) => `<span>${escapeHtml(name)}: ${Number(value.requests || 0)} calls &middot; $${Number(value.costUsd || 0).toFixed(2)}</span>`).join("") : "<span>No metered usage yet</span>"}</div>
     ${quotaCards ? `<div class="job-free-quota-grid">${quotaCards}</div>` : ""}
   </section>`;
 }
 
-function renderRuntime(runtime = {}) {
-  const providers = runtime.providers || {};
+function renderRuntime(runtime = {}, localProcessing = {}) {
+  const providers = Object.entries(runtime.providers || {}).filter(([name]) => name !== "local");
+  const worker = localProcessing.workers?.[0];
   return `<div class="job-runtime-grid">
-    ${Object.entries(providers).map(([name, configured]) => `<article class="job-runtime-card"><span>${escapeHtml(name)}</span><strong>${configured ? "configured" : "missing"}</strong></article>`).join("")}
+    <article class="job-runtime-card"><span>Windows AI worker</span><strong>${worker ? escapeHtml(statusLabel(worker.status)) : "not connected"}</strong></article>
+    ${providers.map(([name, configured]) => `<article class="job-runtime-card"><span>${escapeHtml(name)}</span><strong>${configured ? "configured" : "missing"}</strong></article>`).join("")}
     <article class="job-runtime-card"><span>Repository</span><strong>${escapeHtml(runtime.repository)}</strong></article>
     <article class="job-runtime-card"><span>Fallbacks</span><strong>${escapeHtml(runtime.productionFallbacks)}</strong></article>
   </div>`;
@@ -115,7 +117,7 @@ function renderSummary(summary = {}) {
   const target = Number(summary.calibrationTarget || 20);
   const calibration = summary.calibration || {};
   return `<div class="job-summary-grid">${entries.map(([label, value]) => `<article class="job-stat-card"><span>${label}</span><strong>${value}</strong></article>`).join("")}</div>
-    <section class="job-calibration"><div><span>Calibration labels</span><strong>${labelled} / ${target}</strong></div><div class="job-budget-track"><span style="width:${Math.min(100, target ? (labelled / target) * 100 : 0).toFixed(1)}%"></span></div><small>Auto-shortlisting ${calibration.active ? "enabled" : "locked"} Â· top-10 precision ${Math.round(Number(calibration.precisionTopTen || 0) * 100)}% Â· false rejection ${Math.round(Number(calibration.falseRejectionRate || 0) * 100)}%</small></section>`;
+    <section class="job-calibration"><div><span>Calibration labels</span><strong>${labelled} / ${target}</strong></div><div class="job-budget-track"><span style="width:${Math.min(100, target ? (labelled / target) * 100 : 0).toFixed(1)}%"></span></div><small>Auto-shortlisting ${calibration.active ? "enabled" : "locked"} &middot; top-10 precision ${Math.round(Number(calibration.precisionTopTen || 0) * 100)}% &middot; false rejection ${Math.round(Number(calibration.falseRejectionRate || 0) * 100)}%</small></section>`;
 }
 
 function renderLocalProcessing(local = {}) {
@@ -125,7 +127,7 @@ function renderLocalProcessing(local = {}) {
   const queueControl = local.queueControl || {};
   return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Local inference</p><h2>Windows worker</h2></div><span>${worker ? escapeHtml(statusLabel(worker.status)) : "Not connected yet"}</span></div>
     <div class="job-runtime-grid">
-      ${tasks.length ? tasks.map((task) => `<article class="job-runtime-card"><span>${escapeHtml(statusLabel(task.taskType))} Â· ${escapeHtml(statusLabel(task.status))}</span><strong>${Number(task.count || 0)}</strong></article>`).join("") : `<article class="job-runtime-card"><span>Queue</span><strong>Empty</strong></article>`}
+      ${tasks.length ? tasks.map((task) => `<article class="job-runtime-card"><span>${escapeHtml(statusLabel(task.taskType))} &middot; ${escapeHtml(statusLabel(task.status))}</span><strong>${Number(task.count || 0)}</strong></article>`).join("") : `<article class="job-runtime-card"><span>Queue</span><strong>Empty</strong></article>`}
       ${worker ? `<article class="job-runtime-card"><span>Last seen</span><strong>${escapeHtml(formatDate(worker.lastSeenAt))}</strong></article>` : ""}<article class="job-runtime-card"><span>Queue hold</span><strong>${queueControl.holdNewTasks ? "Enabled" : "Disabled"}</strong></article>
     </div>
   </section>`;
@@ -141,16 +143,62 @@ const FEEDBACK_REASONS = [
 function renderClaims(claims = []) {
   if (!claims.length) return `<p class="job-muted">No grounded claims yet.</p>`;
   return `<div class="job-claims">${claims.slice(0, 12).map((claim) => `<div class="job-claim">
-    <div><strong>${escapeHtml(statusLabel(claim.claimType))}</strong><span>${escapeHtml(claim.evidenceType)} Â· ${Math.round(Number(claim.confidence || 0) * 100)}%</span></div>
+    <div><strong>${escapeHtml(statusLabel(claim.claimType))}</strong><span>${escapeHtml(claim.evidenceType)} &middot; ${Math.round(Number(claim.confidence || 0) * 100)}%</span></div>
     <p>${escapeHtml(claim.value)}</p>
     ${claim.supportingPassage ? `<blockquote>${escapeHtml(claim.supportingPassage)}</blockquote>` : ""}
     ${claim.sourceUrl ? `<a class="inline-link" href="${escapeHtml(claim.sourceUrl)}" target="_blank" rel="noreferrer">Source</a>` : ""}
   </div>`).join("")}</div>`;
 }
 
-function renderDimensions(dimensions) {
+const DIMENSION_LABELS = {
+  expertiseFit: "Expertise fit",
+  workAuthorization: "Visa / OPT compatibility",
+  compensation: "Compensation",
+  codingInterviewSafety: "No-coding-interview confidence",
+  leadershipScope: "Leadership and scope",
+  companyQuality: "Company quality",
+  interviewVelocity: "Interview velocity",
+  aiMlProductAdjacency: "AI / ML product adjacency",
+  financialServicesAdvantage: "Financial-services advantage",
+  remoteFlexibility: "Remote flexibility",
+  roleFit: "Legacy role fit",
+  locationAuthorization: "Legacy location / authorization",
+  compensationUpside: "Legacy compensation upside",
+  codingInterviewRisk: "Legacy coding-interview signal",
+  leadershipLevel: "Legacy leadership level",
+  aiDataRelevance: "Legacy AI / data relevance",
+};
+
+const GATE_LABELS = {
+  expertiseFit: "Responsibilities match past experience",
+  workAuthorization: "F-1 OPT / future sponsorship",
+  compensation: "Base compensation reaches $170K",
+  codingInterview: "No software-engineering coding interview",
+};
+
+function renderMustHaves(job) {
+  if (!job.mustHave) return "";
+  return `<section class="job-must-have"><div class="job-section-heading"><strong>Must-have gates</strong><span>Any confirmed blocker means pass; unknown means review</span></div>
+    <div class="job-gate-grid">${Object.entries(job.mustHave).map(([name, gate]) => {
+      const sourceUrl = safeExternalUrl(gate.sourceUrl);
+      return `<article class="job-gate-result job-gate-result--${escapeHtml(gate.status || "unknown")}">
+        <div><span>${escapeHtml(GATE_LABELS[name] || statusLabel(name))}</span><strong>${escapeHtml(gate.status || "unknown")}</strong></div>
+        <p>${escapeHtml(gate.reasoning || "Evidence has not been established.")}</p>
+        <small>${escapeHtml(gate.evidenceStatus || "unknown")} evidence${sourceUrl ? ` &middot; <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">Source</a>` : ""}</small>
+      </article>`;
+    }).join("")}</div></section>`;
+}
+
+function renderDimensions(job) {
+  const dimensions = job.dimensions;
   if (!dimensions) return "";
-  return `<div class="job-dimensions">${Object.entries(dimensions).map(([name, value]) => `<div><span>${escapeHtml(statusLabel(name))}</span><strong>${escapeHtml(value.score)}/5</strong><p>${escapeHtml(value.reasoning)}</p></div>`).join("")}</div>`;
+  const weights = job.decision?.weights || {};
+  return `<section><div class="job-section-heading"><strong>Weighted evaluation</strong><span>Unknown evidence is not scored as failure</span></div>
+    <div class="job-dimensions">${Object.entries(dimensions).map(([name, value]) => {
+      const score = value?.score === null || value?.score === undefined ? "Unknown" : `${escapeHtml(value.score)}/5`;
+      const weight = weights[name] ? `${weights[name]}% weight` : "legacy result";
+      return `<div class="${value?.score === null || value?.score === undefined ? "is-unknown" : ""}"><span>${escapeHtml(DIMENSION_LABELS[name] || statusLabel(name))}</span><strong>${score}</strong><small>${escapeHtml(weight)} &middot; ${escapeHtml(value?.evidenceStatus || "unknown")} evidence</small><p>${escapeHtml(value?.reasoning || "Evidence has not been established.")}</p></div>`;
+    }).join("")}</div></section>`;
 }
 
 function renderFeedbackForm(job) {
@@ -200,7 +248,7 @@ function renderJob(job) {
   return `<article class="job-result" data-job-id="${escapeHtml(job.id)}">
     <div class="job-result-head">
       <div><p class="eyebrow">${escapeHtml(job.roleFamily || "Exploratory")}</p><h3>${escapeHtml(job.title)}</h3>
-        <p>${escapeHtml(job.company || "Company not identified")} Â· ${escapeHtml(job.location || "Location not listed")}</p></div>
+        <p>${escapeHtml(job.company || "Company not identified")} &middot; ${escapeHtml(job.location || "Location not listed")}</p></div>
       <div class="job-result-score"><span>${score === null ? "Pending" : score}</span><small>${escapeHtml(statusLabel(job.status))}</small></div>
     </div>
     ${renderCardFacts(job)}
@@ -210,7 +258,7 @@ function renderJob(job) {
       ${(job.redFlags || []).slice(0, 3).map((flag) => `<span class="job-pill job-pill--bad">${escapeHtml(flag)}</span>`).join("")}
       ${(job.unknowns || []).slice(0, 3).map((flag) => `<span class="job-pill">Unknown: ${escapeHtml(flag)}</span>`).join("")}
     </div>
-    <div class="job-result-meta"><span>${escapeHtml(job.sourceProvider)}</span><span>${escapeHtml(job.lane)}</span><span>${activeModel ? `AI: ${escapeHtml(activeModel.provider)} Â· ${escapeHtml(activeModel.model)}` : "AI: pending"}</span><span>Agreement: ${escapeHtml(job.modelAgreement)}</span><span>${formatDate(job.postedAt || job.firstSeenAt)}</span></div>
+    <div class="job-result-meta"><span>${escapeHtml(job.sourceProvider)}</span><span>${escapeHtml(job.lane)}</span><span>${activeModel ? `AI: ${escapeHtml(activeModel.provider)} &middot; ${escapeHtml(activeModel.model)}` : "AI: pending"}</span><span>Decision: ${job.decisionSource === "owner" ? "You" : "AI"}</span><span>Agreement: ${escapeHtml(job.modelAgreement)}</span><span>${formatDate(job.postedAt || job.firstSeenAt)}</span></div>
     <div class="job-result-actions">
       ${safeExternalUrl(job.url) ? `<a class="button button-secondary" href="${escapeHtml(safeExternalUrl(job.url))}" target="_blank" rel="noreferrer">Open role</a>` : ""}
       <button type="button" class="verify-inline-button" data-rerun-job="${escapeHtml(job.id)}">Rerun</button>
@@ -218,7 +266,8 @@ function renderJob(job) {
     </div>
     ${renderFeedbackForm(job)}
     <details class="job-detail"><summary>Evidence and full evaluation</summary>
-      ${renderDimensions(job.dimensions)}
+      ${renderMustHaves(job)}
+      ${renderDimensions(job)}
       ${job.critic ? `<section class="job-critic"><strong>Independent AI review</strong><p>${escapeHtml(job.critic.summary)}</p>${(job.critic.objections || []).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</section>` : ""}
       ${renderClaims(job.claims)}
       ${(job.contactCandidates || []).length ? `<section class="job-contacts"><strong>Hiring contact candidates</strong>${job.contactCandidates.map((contact) => `<a href="${escapeHtml(contact.url)}" target="_blank" rel="noreferrer"><span>${escapeHtml(contact.nameOrTitle)}</span><small>${escapeHtml(contact.evidence || "Search evidence")}</small></a>`).join("")}</section>` : ""}
@@ -233,14 +282,14 @@ function renderJobs(jobs = []) {
   return `<div class="job-results">${jobs.map(renderJob).join("")}</div>`;
 }
 
-function renderDiscoveryLeads(leads = []) {
+function renderDiscoveryLeads(leads = [], pagination = {}) {
   if (!leads.length) return `<div class="ops-empty"><strong>No raw leads retained yet</strong><p>The next local portal collection will populate this view.</p></div>`;
-  return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Metadata-first intake</p><h2>Raw discovery leads</h2></div><span>${leads.length} retained</span></div>
+  return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Metadata-first intake</p><h2>Raw discovery leads</h2></div><span>${Number(pagination.total || leads.length)} retained</span></div>
     <div class="job-run-list">${leads.map((lead) => {
       const url = safeExternalUrl(lead.url);
       return `<article class="job-run-card"><div><span>${escapeHtml(lead.sourceProvider)}</span><strong>${escapeHtml(statusLabel(lead.status))}</strong></div>
-        <h3>${escapeHtml(lead.title)}</h3><p>${escapeHtml(lead.company)}${lead.location ? ` Â· ${escapeHtml(lead.location)}` : ""}</p>
-        <p>${escapeHtml(statusLabel(lead.lane))} Â· ${escapeHtml(statusLabel(lead.familyId))} Â· ${formatDate(lead.lastSeenAt)}</p>
+        <h3>${escapeHtml(lead.title)}</h3><p>${escapeHtml(lead.company)}${lead.location ? ` &middot; ${escapeHtml(lead.location)}` : ""}</p>
+        <p>${escapeHtml(statusLabel(lead.lane))} &middot; ${escapeHtml(statusLabel(lead.familyId))} &middot; ${formatDate(lead.lastSeenAt)}</p>
         <small>${escapeHtml(lead.reason)}</small>${url ? `<a class="inline-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">Open source</a>` : ""}</article>`;
     }).join("")}</div></section>`;
 }
@@ -248,18 +297,19 @@ function renderDiscoveryLeads(leads = []) {
 function renderTaxonomy(taxonomy = {}) {
   const proposed = taxonomy.proposed || [];
   const active = taxonomy.active || [];
-  return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Title intelligence</p><h2>Pattern proposals</h2></div><span>${proposed.length} awaiting review</span></div>
-    <div class="job-taxonomy-list">${proposed.length ? proposed.map((pattern) => `<article><div><strong>${escapeHtml(pattern.expression)}</strong><span>${escapeHtml(pattern.familyLabel)} Â· ${escapeHtml(pattern.matchType)} Â· support ${pattern.supportCount}</span></div><p>${escapeHtml(pattern.metrics?.rationale || "Observed title alias")}</p><div><button class="verify-inline-button" data-taxonomy-action="approve" data-pattern-id="${escapeHtml(pattern.id)}">Approve</button><button class="verify-inline-button" data-taxonomy-action="reject" data-pattern-id="${escapeHtml(pattern.id)}">Reject</button></div></article>`).join("") : `<p class="verify-note">No pending proposals.</p>`}</div>
-    <details class="job-active-patterns"><summary>${active.length} active patterns</summary><div>${active.map((pattern) => `<span>${escapeHtml(pattern.familyLabel)}: ${escapeHtml(pattern.expression)}${pattern.version > 1 ? `<button class="verify-inline-button" data-taxonomy-action="rollback" data-pattern-id="${escapeHtml(pattern.id)}">Rollback</button>` : ""}</span>`).join("")}</div></details>
+  const entries = [...proposed, ...active];
+  const totals = taxonomy.totals || {};
+  return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Title intelligence</p><h2>Title rules</h2></div><span>${Number(totals.proposed || 0)} awaiting review &middot; ${Number(totals.active || 0)} active</span></div>
+    <div class="job-taxonomy-list">${entries.length ? entries.map((pattern) => `<article><div><strong>${escapeHtml(pattern.expression)}</strong><span>${escapeHtml(pattern.familyLabel)} &middot; ${escapeHtml(pattern.matchType)} &middot; ${escapeHtml(pattern.status)}</span></div><p>${escapeHtml(pattern.metrics?.rationale || "Curated title alias")}</p><div>${pattern.status === "proposed" ? `<button class="verify-inline-button" data-taxonomy-action="approve" data-pattern-id="${escapeHtml(pattern.id)}">Approve</button><button class="verify-inline-button" data-taxonomy-action="reject" data-pattern-id="${escapeHtml(pattern.id)}">Reject</button>` : pattern.version > 1 ? `<button class="verify-inline-button" data-taxonomy-action="rollback" data-pattern-id="${escapeHtml(pattern.id)}">Rollback</button>` : ""}</div></article>`).join("") : `<p class="verify-note">No title rules on this page.</p>`}</div>
   </section>`;
 }
 
 function renderRuns(runs = []) {
   const collectorSummary = (run) => Object.entries(run.providers?.collector?.sources || {})
     .map(([sourceId, state]) => `${sourceId}: ${state.status} (${Number(state.jobCount || 0)} jobs)`)
-    .join(" · ");
+    .join(" | ");
   return `<section class="job-panel"><div class="job-panel-head"><div><p class="eyebrow">Operations</p><h2>Workflow runs</h2></div></div>
-    <div class="job-run-list">${runs.length ? runs.map((run) => `<article class="job-run-card"><div><span>${escapeHtml(run.trigger)}</span><strong>${escapeHtml(statusLabel(run.status))}</strong></div><p>${escapeHtml(statusLabel(run.phase))} · ${formatDate(run.startedAt)}</p><p>${Number(run.stats?.discovered || 0)} discovered · ${Number(run.stats?.triaged || 0)} triaged · ${Number(run.stats?.deepEvaluated || 0)} deep · ${Number(run.stats?.shortlisted || 0)} shortlisted</p>${collectorSummary(run) ? `<small>${escapeHtml(collectorSummary(run))}</small>` : ""}${(run.errors || []).map((error) => `<small>${escapeHtml(error.message)}</small>`).join("")}</article>`).join("") : `<p class="verify-note">No runs yet.</p>`}</div>
+    <div class="job-run-list">${runs.length ? runs.map((run) => `<article class="job-run-card"><div><span>${escapeHtml(run.trigger)}</span><strong>${escapeHtml(statusLabel(run.status))}</strong></div><p>${escapeHtml(statusLabel(run.phase))} &middot; ${formatDate(run.startedAt)}</p><p>${Number(run.stats?.discovered || 0)} discovered &middot; ${Number(run.stats?.triaged || 0)} triaged &middot; ${Number(run.stats?.deepEvaluated || 0)} deep &middot; ${Number(run.stats?.shortlisted || 0)} shortlisted</p>${collectorSummary(run) ? `<small>${escapeHtml(collectorSummary(run))}</small>` : ""}${(run.errors || []).map((error) => `<small>${escapeHtml(error.message)}</small>`).join("")}</article>`).join("") : `<p class="verify-note">No runs yet.</p>`}</div>
   </section>`;
 }
 
@@ -270,6 +320,34 @@ const TABS = [
   ["shortlist", "Shortlist"], ["needs_review", "Deep review"],
   ["passed", "Passed"], ["expired", "Expired"], ["taxonomy", "Title rules"], ["runs", "Runs"],
 ];
+
+const NON_JOB_VIEWS = new Set(["discovery", "taxonomy", "runs"]);
+
+function renderViewFilters(dashboard, state) {
+  if (NON_JOB_VIEWS.has(state.view)) return "";
+  const filters = dashboard.filters || {};
+  const counts = filters.decisionCounts || {};
+  const families = filters.roleFamilies || [];
+  return `<section class="job-view-controls" aria-label="View filters">
+    <div class="job-source-filter" role="group" aria-label="Decision source">
+      ${[["all", "All", counts.all], ["owner", "My decisions", counts.owner], ["model", "AI decisions", counts.model]].map(([value, label, count]) => `<button type="button" class="${state.decisionSource === value ? "is-active" : ""}" data-decision-source="${value}">${label} (${Number(count || 0)})</button>`).join("")}
+    </div>
+    <label><span>Role family</span><select data-role-family><option value="all">All role families</option>${families.map((family) => `<option value="${escapeHtml(family.id)}" ${state.roleFamily === family.id ? "selected" : ""}>${escapeHtml(family.label)} (${Number(family.count || 0)})</option>`).join("")}</select></label>
+  </section>`;
+}
+
+function renderPagination(pagination = {}) {
+  const page = Number(pagination.page || 1);
+  const totalPages = Number(pagination.totalPages || 1);
+  const total = Number(pagination.total || 0);
+  const start = total ? (page - 1) * Number(pagination.pageSize || 10) + 1 : 0;
+  const end = Math.min(total, page * Number(pagination.pageSize || 10));
+  return `<nav class="job-pagination" aria-label="Results pages">
+    <button type="button" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""} aria-label="Previous page" title="Previous page">&#8592;</button>
+    <span>${start}-${end} of ${total} &middot; Page ${page} of ${totalPages}</span>
+    <button type="button" data-page="${page + 1}" ${page >= totalPages ? "disabled" : ""} aria-label="Next page" title="Next page">&#8594;</button>
+  </nav>`;
+}
 
 function renderDashboard(state) {
   if (!state.dashboard) {
@@ -283,27 +361,35 @@ function renderDashboard(state) {
   const active = state.view;
   const content = active === "taxonomy" ? renderTaxonomy(dashboard.taxonomy)
     : active === "runs" ? renderRuns(dashboard.runs)
-      : active === "discovery" ? renderDiscoveryLeads(dashboard.discoveryLeads)
+      : active === "discovery" ? renderDiscoveryLeads(dashboard.discoveryLeads, dashboard.pagination)
         : renderJobs(dashboard.jobs);
   return `<section class="job-hero"><div><p class="eyebrow">Private command center</p><h1>Job Intelligence</h1>
-      <p class="section-intro">Evidence-grounded sourcing for AI product, data strategy, analytics leadership, and fintech roles.</p></div>
+      <p class="section-intro">Evidence-grounded sourcing for analytics, experimentation, product data science, strategy, and adjacent AI roles.</p></div>
     <div class="job-actions"><button type="button" class="button button-primary" data-run-ingest ${state.loading ? "disabled" : ""}>${state.loading ? "Queueing..." : "Run now"}</button>
       <label class="verify-field"><span>Manual job URLs</span><textarea rows="3" data-manual-urls placeholder="One URL per line">${escapeHtml(state.manualUrls)}</textarea></label></div></section>
     ${state.error ? `<p class="auth-error">${escapeHtml(state.error)}</p>` : ""}
     ${state.notice ? `<p class="job-notice">${escapeHtml(state.notice)}</p>` : ""}
-    ${renderSummary(dashboard.summary)}${renderBudget(dashboard.usage)}${renderLocalProcessing(dashboard.localProcessing)}${renderRuntime(dashboard.runtime)}
-    <nav class="job-filter-tabs" aria-label="Job intelligence views">${TABS.map(([value, label]) => `<button type="button" class="${active === value ? "is-active" : ""}" data-job-view="${value}">${label}</button>`).join("")}</nav>
-    ${content}`;
+    ${renderSummary(dashboard.summary)}${renderBudget(dashboard.usage)}${renderLocalProcessing(dashboard.localProcessing)}${renderRuntime(dashboard.runtime, dashboard.localProcessing)}
+    <nav class="job-filter-tabs" aria-label="Job intelligence views">${TABS.map(([value, label]) => `<button type="button" class="${active === value ? "is-active" : ""}" data-job-view="${value}">${label} (${Number(dashboard.tabCounts?.[value] || 0)})</button>`).join("")}</nav>
+    ${renderViewFilters(dashboard, state)}
+    ${content}
+    ${renderPagination(dashboard.pagination)}`;
 }
 
 export function mountJobSearch(root) {
   if (!root) return;
-  const state = { status: null, dashboard: null, loading: false, error: "", notice: "", view: "all_candidates", manualUrls: "" };
+  const state = { status: null, dashboard: null, loading: false, error: "", notice: "", view: "all_candidates", page: 1, decisionSource: "all", roleFamily: "all", manualUrls: "" };
 
   async function loadStatus() { state.status = await request("/api/job-search/status"); }
   async function loadDashboard() {
-    const view = ["taxonomy", "runs"].includes(state.view) ? "all_candidates" : state.view;
-    state.dashboard = await request(`/api/job-search/jobs?view=${encodeURIComponent(view)}`);
+    const params = new URLSearchParams({
+      view: state.view,
+      page: String(state.page),
+      decisionSource: state.decisionSource,
+      roleFamily: state.roleFamily,
+    });
+    state.dashboard = await request(`/api/job-search/jobs?${params}`);
+    state.page = Number(state.dashboard.pagination?.page || 1);
   }
 
   async function render() {
@@ -332,7 +418,7 @@ export function mountJobSearch(root) {
     for (let attempt = 0; attempt < 90; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       const { run } = await request(`/api/job-search/runs/${encodeURIComponent(runId)}`);
-      state.notice = `Run ${statusLabel(run.status)} Â· ${statusLabel(run.phase)}`;
+      state.notice = `Run ${statusLabel(run.status)} | ${statusLabel(run.phase)}`;
       if (["completed", "partial", "failed", "blocked"].includes(run.status)) { await loadDashboard(); await render(); return; }
       if (attempt % 3 === 0) await render();
     }
@@ -356,7 +442,23 @@ export function mountJobSearch(root) {
       } catch (error) { state.loading = false; state.error = error.message; await render(); }
     });
     root.querySelectorAll("[data-job-view]").forEach((node) => node.addEventListener("click", async () => {
-      try { state.view = node.dataset.jobView; state.error = ""; await loadDashboard(); }
+      try { state.view = node.dataset.jobView; state.page = 1; state.decisionSource = "all"; state.roleFamily = "all"; state.error = ""; await loadDashboard(); }
+      catch (error) { state.error = error.message; }
+      await render();
+    }));
+    root.querySelectorAll("[data-decision-source]").forEach((node) => node.addEventListener("click", async () => {
+      try { state.decisionSource = node.dataset.decisionSource; state.page = 1; state.error = ""; await loadDashboard(); }
+      catch (error) { state.error = error.message; }
+      await render();
+    }));
+    root.querySelector("[data-role-family]")?.addEventListener("change", async (event) => {
+      try { state.roleFamily = event.currentTarget.value; state.page = 1; state.error = ""; await loadDashboard(); }
+      catch (error) { state.error = error.message; }
+      await render();
+    });
+    root.querySelectorAll("[data-page]").forEach((node) => node.addEventListener("click", async () => {
+      if (node.disabled) return;
+      try { state.page = Number(node.dataset.page || 1); state.error = ""; await loadDashboard(); }
       catch (error) { state.error = error.message; }
       await render();
     }));
@@ -373,7 +475,7 @@ export function mountJobSearch(root) {
       catch (error) { state.error = error.message; await render(); }
     }));
     root.querySelectorAll("[data-rerun-job]").forEach((node) => node.addEventListener("click", async () => {
-      try { const queued = await request(`/api/job-search/jobs/${encodeURIComponent(node.dataset.rerunJob)}/rerun`, { method: "POST", body: "{}" }); state.notice = `Rerun queued: ${queued.runId}`; await render(); pollRun(queued.runId); }
+      try { const queued = await request(`/api/job-search/jobs/${encodeURIComponent(node.dataset.rerunJob)}/rerun`, { method: "POST", body: "{}" }); state.notice = `Deep evaluation queued for the Windows worker: ${queued.taskId}`; await loadDashboard(); await render(); }
       catch (error) { state.error = error.message; await render(); }
     }));
     root.querySelectorAll("[data-copy-outreach]").forEach((node) => node.addEventListener("click", async () => {

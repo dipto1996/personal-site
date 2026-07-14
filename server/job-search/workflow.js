@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { fetchConfiguredAtsJobs, fetchKnownCompanyAtsJobs, validateDiscoveryCandidates } from "./ats.js";
 import { buildSearchPlan, getManualDiscoveryUrls } from "./discovery.js";
 import { TARGET_PROFILE } from "./profile.js";
+import { EVALUATION_FRAMEWORK_VERSION, finalizeDeepEvaluation } from "./evaluation-framework.js";
 import {
   callCriticModel,
   callDeepModel,
@@ -42,6 +43,7 @@ import {
   setLocalQueueControl,
   setLocalTaskStatus,
   updateRun,
+  updateJobClassification,
   upsertCompany,
   upsertJob,
   writeResearchCache,
@@ -58,13 +60,14 @@ import {
   classifyTitle,
   evaluateProposalForPromotion,
   normalizeTitle,
+  titleFamilyById,
 } from "./taxonomy.js";
 import { classifyCandidateTitle } from "./title-ontology.js";
 import { normalizeTimestampInput } from "./utils.js";
 import { rotatingWatchlistCompanies } from "./watchlist.js";
 import { parseWorkerOutput } from "./worker-contract.js";
 
-const PROMPT_VERSION = "job-intelligence-2026-07-v1";
+export const PROMPT_VERSION = "job-intelligence-2026-07-analytics-first-v2";
 
 function hash(...parts) {
   return createHash("sha256").update(parts.join("|")).digest("hex");
@@ -134,22 +137,56 @@ function normalizePostedTimestamp(value) {
   };
 }
 
+function currentTitleClassification(rawTitle, patterns) {
+  const title = classifyTitle(rawTitle, patterns);
+  const ontology = classifyCandidateTitle(rawTitle);
+  const routedFamilyId = title.familyId === "exploratory" && ontology.eligible
+    ? ontology.familyId
+    : title.familyId;
+  const routedFamily = titleFamilyById(routedFamilyId);
+  return {
+    normalizedTitle: title.normalizedTitle,
+    roleFamilyId: routedFamilyId,
+    titleClassification: {
+      ...title,
+      familyId: routedFamilyId,
+      familyLabel: routedFamily?.label || title.familyLabel,
+      lane: routedFamilyId === title.familyId ? title.lane : ontology.lane,
+      ontology,
+    },
+  };
+}
+
 function clearMismatchPromoted(job) {
   return job?.details?.triage?.relevance === "irrelevant" && ["apply", "maybe"].includes(job?.disposition);
 }
 
+function shouldRefreshTriage(job) {
+  return job?.details?.triageStatus === "complete"
+    && job?.details?.triage?.relevance === "irrelevant"
+    && job?.details?.triagePromptVersion !== PROMPT_VERSION;
+}
+
 function shouldQueueDeepForJob(job) {
-  if (!job || job.details?.deepStatus === "complete" || job.details?.deepEvaluation) return false;
+  if (!job) return false;
   const relevance = job.details?.triage?.relevance;
+  const staleEvaluation = Boolean(job.details?.deepEvaluation?.dimensions)
+    && job.details?.evaluationFrameworkVersion !== EVALUATION_FRAMEWORK_VERSION;
+  if (staleEvaluation) return relevance === "relevant" || relevance === "uncertain" || clearMismatchPromoted(job);
+  if (job.details?.deepStatus === "complete" || job.details?.deepEvaluation) return false;
   return relevance === "relevant" || relevance === "uncertain" || clearMismatchPromoted(job);
 }
 
 function shouldQueueCriticForJob(job) {
-  return Boolean(job?.details?.deepEvaluation) && job?.details?.criticStatus !== "complete";
+  return Boolean(job?.details?.deepEvaluation)
+    && (!job?.details?.evaluationFrameworkVersion || job.details.evaluationFrameworkVersion === EVALUATION_FRAMEWORK_VERSION)
+    && !(job?.details?.deepEvaluation?.decision?.blockers || []).length
+    && job?.details?.criticStatus !== "complete";
 }
 
 function nextLocalTaskType(job) {
   if (!job) return null;
+  if (shouldRefreshTriage(job)) return "triage";
   if (job.details?.triageStatus !== "complete") return "triage";
   if (shouldQueueDeepForJob(job)) return "deep";
   if (shouldQueueCriticForJob(job)) return "critic";
@@ -333,12 +370,16 @@ async function normalizeAndPersist(jobs) {
   const persisted = [];
   for (const job of jobs) {
     const postedTimestamp = normalizePostedTimestamp(job.postedAt || job.postedAtRaw || "");
-    const title = classifyTitle(job.title, patterns);
-    const ontology = classifyCandidateTitle(job.title);
-    const routedFamilyId = title.familyId === "exploratory" && ontology.eligible
-      ? ontology.familyId
-      : title.familyId;
+    const classification = currentTitleClassification(job.title, patterns);
+    const title = classification.titleClassification;
+    const routedFamilyId = classification.roleFamilyId;
     const contentHash = hash(job.title, job.company, job.location || "", job.description);
+    const structuredCompensation = String(
+      job.compensation
+      || job.raw?.detected_extensions?.salary
+      || job.raw?.baseSalary
+      || "",
+    ).trim().slice(0, 300);
     const existing = await getJob(job.sourceId) || await getJobByCanonicalUrl(job.url);
     const unchanged = existing?.contentHash === contentHash;
     const record = await upsertJob({
@@ -346,7 +387,7 @@ async function normalizeAndPersist(jobs) {
       ...job,
       sourceId: existing?.sourceId || job.sourceId,
       canonicalUrl: job.url,
-      normalizedTitle: title.normalizedTitle,
+      normalizedTitle: classification.normalizedTitle,
       contentHash,
       roleFamilyId: routedFamilyId,
       status: unchanged ? existing.status : "triage_pending",
@@ -358,23 +399,31 @@ async function normalizeAndPersist(jobs) {
           ...(existing?.details?.sourceMetadata || {}),
           ...(postedTimestamp.postedAtRaw ? { postedAtRaw: postedTimestamp.postedAtRaw } : {}),
           ...(job.raw?.pageExtraction ? { pageExtraction: job.raw.pageExtraction } : {}),
+          ...(structuredCompensation ? { compensation: structuredCompensation } : {}),
         },
         titleClassification: {
-          ...title,
-          familyId: routedFamilyId,
-          familyLabel: routedFamilyId === title.familyId ? title.familyLabel : "Broad function and seniority ontology",
-          lane: routedFamilyId === title.familyId ? title.lane : ontology.lane,
-          ontology,
+          ...classification.titleClassification,
         },
-        sourceEvidence: [{
-          claimType: "job_posting",
-          value: "Source job description",
-          sourceUrl: job.url || "",
-          supportingPassage: job.description.slice(0, 600),
-          sourceDate: postedTimestamp.postedAt || postedTimestamp.postedAtRaw || "",
-          confidence: 1,
-          evidenceType: "explicit",
-        }],
+        sourceEvidence: [
+          {
+            claimType: "job_posting",
+            value: "Source job description",
+            sourceUrl: job.url || "",
+            supportingPassage: job.description.slice(0, 600),
+            sourceDate: postedTimestamp.postedAt || postedTimestamp.postedAtRaw || "",
+            confidence: 1,
+            evidenceType: "explicit",
+          },
+          ...(structuredCompensation ? [{
+            claimType: "compensation",
+            value: structuredCompensation,
+            sourceUrl: job.url || "",
+            supportingPassage: structuredCompensation,
+            sourceDate: postedTimestamp.postedAt || postedTimestamp.postedAtRaw || "",
+            confidence: 1,
+            evidenceType: "explicit",
+          }] : []),
+        ],
       },
     });
     await addSnapshot(record.id, { contentHash, title: record.title, description: record.description, raw: job.raw || {} });
@@ -414,7 +463,7 @@ function triageMessages(batch) {
     },
     {
       role: "user",
-      content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nConstraints:\n${TARGET_PROFILE.avoid}\n${TARGET_PROFILE.targetGeography}\n\nEvaluate every job. Use relevance=irrelevant only for a clear function mismatch. A role mentioning Python, SQL, or engineering partnership is not automatically coding-heavy. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.\n\nJobs:\n${JSON.stringify(batch.map((job) => ({ sourceId: job.sourceId, title: job.title, company: job.company, location: job.location, description: job.description.slice(0, 4000) })), null, 2)}\n\nReturn {"jobs":[{"sourceId":"...","evaluation":{"roleFamilyId":"...","relevance":"relevant|uncertain|irrelevant","confidence":0.0,"scopeSummary":"...","codingIntensity":"low|medium|high|unknown","seniority":"too_junior|aligned|stretch|unknown","reasons":[],"unknowns":[]}}]}`,
+      content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nConstraints:\n${TARGET_PROFILE.avoid}\n${TARGET_PROFILE.targetGeography}\n\nEvaluate every job. Use relevance=irrelevant only for a clear primary-function mismatch. Analytics, experimentation, product analytics, marketing/customer analytics, strategy analytics, data-science management, decision science, data products, and cross-functional product-building are core matches in any industry. AI, financial services, and remote work are not prerequisites. Python, SQL, statistics, model building, or engineering partnership are not automatically coding-interview-heavy. roleFamilyId must be exactly one of: ai_product_platform, data_ai_strategy, product_decision_science, analytics_leadership, business_strategy_management, ai_governance_model_risk, ai_operator_context, fintech_finserv_leadership, exploratory.\n\nJobs:\n${JSON.stringify(batch.map((job) => ({ sourceId: job.sourceId, title: job.title, company: job.company, location: job.location, description: job.description.slice(0, 4000) })), null, 2)}\n\nReturn {"jobs":[{"sourceId":"...","evaluation":{"roleFamilyId":"...","relevance":"relevant|uncertain|irrelevant","confidence":0.0,"scopeSummary":"...","codingIntensity":"low|medium|high|unknown","seniority":"too_junior|aligned|stretch|unknown","reasons":[],"unknowns":[]}}]}`,
     },
   ];
 }
@@ -454,6 +503,7 @@ async function triageJobs(jobs, runId) {
           ...job.details,
           triage: evaluation,
           triageStatus: "complete",
+          triagePromptVersion: PROMPT_VERSION,
           triageProvider: response.provider,
           triageModel: response.model,
           triageAttempts: response.attempts || [],
@@ -471,12 +521,13 @@ async function triageJobs(jobs, runId) {
 }
 
 async function researchJob(job, runId) {
-  const cacheKey = hash("company-role-research-v3", job.company, job.normalizedTitle || job.title);
+  const cacheKey = hash("company-role-research-v4", job.company, job.normalizedTitle || job.title);
   const cached = await readResearchCache(cacheKey);
   if (cached) return cached;
+  const cleanTitle = String(job.title || "").replace(/[^a-z0-9&,+/() -]+/gi, " ").replace(/\s+/g, " ").trim();
   const queries = [
-    `"${job.company}" "${job.title}" (salary OR compensation OR interview process)`,
-    `"${job.company}" (visa sponsorship OR work authorization OR H-1B OR "remote India" OR "remote worldwide" OR recruiter)`,
+    `"${job.company}" "${cleanTitle}" (salary OR compensation OR "pay range" OR sponsorship OR "work authorization" OR "coding interview" OR "interview process")`,
+    `"${job.company}" ("STEM OPT" OR "F-1 OPT" OR "E-Verify" OR H-1B OR LCA) (site:e-verify.gov OR site:dol.gov OR site:uscis.gov OR site:dhs.gov)`,
   ];
   const results = [];
   const errors = [];
@@ -613,7 +664,7 @@ function deepMessages(job, research, examples) {
     },
     {
       role: "user",
-      content: `Candidate:\n${TARGET_PROFILE.baseline}\n\nTarget geography: ${TARGET_PROFILE.targetGeography}\nCompensation: ${TARGET_PROFILE.compensation}\nAvoid: ${TARGET_PROFILE.avoid}\n\nJob:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 12000) }, null, 2)}\n\nWeb evidence:\n${JSON.stringify(compactResearch, null, 2)}\n\nPrior owner feedback in this role family:\n${JSON.stringify(examples.slice(0, 8), null, 2)}\n\nEvaluate role fit, financial-services advantage, AI/data relevance, leadership, coding/interview risk, location/authorization, compensation/upside, company quality, and interview velocity. Each dimension has score 0-5 and reasoning under 35 words. Scores measure attractiveness for this candidate: 5 is excellent/low risk and 0 is incompatible/high risk. Apply these hard rules: (1) if hands-on data engineering, software engineering, platform implementation, or production coding is the primary function, roleFit must be 0-2 and verdict must be pass; financial-services overlap cannot rescue it. (2) US on-site or hybrid work is incompatible with continuing from India unless the evidence explicitly offers global remote work; never infer remote eligibility from missing text. (3) explicit citizenship, clearance, or incompatible work authorization is a blocker. (4) do not infer coding interviews solely from technical requirements, but record high interview risk as inferred. (5) missing compensation, visa, remote, or interview facts remain unknown. Return verdict apply|maybe|pass, overallScore 0-100, a summary under 80 words, dimensions, no more than 10 material claims, no more than 5 red flags, 5 green flags, 6 unknowns, and a concise outreachAngle. Every explicit or inferred claim must quote a non-empty supportingPassage from supplied evidence and use its source URL. If no passage supports it, omit the claim or mark the fact unknown. Do not use model memory as evidence. Before finalizing, check that the verdict, dimension scores, red flags, and summary do not contradict each other.`
+      content: `Candidate:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nDifferentiators, not prerequisites:\n${JSON.stringify(TARGET_PROFILE.differentiators, null, 2)}\n\nFour must-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nTarget geography: ${TARGET_PROFILE.targetGeography}\nCompensation: ${TARGET_PROFILE.compensation}\nWork authorization: ${TARGET_PROFILE.workAuthorization}\nAvoid: ${TARGET_PROFILE.avoid}\nRanking weights: ${JSON.stringify(TARGET_PROFILE.rankingWeights)}\n\nJob:\n${JSON.stringify({ title: job.title, company: job.company, location: job.location, url: job.canonicalUrl, description: job.description.slice(0, 12000), structuredCompensation: job.details?.sourceMetadata?.compensation || "" }, null, 2)}\n\nWeb evidence:\n${JSON.stringify(compactResearch, null, 2)}\n\nPrior owner feedback in this role family:\n${JSON.stringify(examples.slice(0, 8), null, 2)}\n\nEvaluate the four must-have gates first. status=blocked requires supported incompatibility; status=unknown means missing evidence; status=met requires support. Then score expertiseFit, workAuthorization, compensation, codingInterviewSafety, leadershipScope, companyQuality, interviewVelocity, aiMlProductAdjacency, financialServicesAdvantage, and remoteFlexibility from 0-5. Use score=null and evidenceStatus=unknown when evidence is missing; unknown is never 0. codingInterviewSafety 5 means low/no coding-interview risk and 0 means explicit high risk. interviewVelocity concerns process speed only. leadershipScope concerns responsibility only. Public-sector or non-financial-services context cannot reduce expertise fit or leadership scope when responsibilities match. AI/ML adjacency, financial-services overlap, and remote flexibility are bonuses, not prerequisites. US on-site/hybrid is acceptable when authorization is compatible. A primarily engineering-implementation role is a function blocker, but Python, SQL, statistics, predictive modeling, and experimentation inside analytics/data-science work are not. Missing compensation, visa, or interview evidence produces unknown and normally maybe, never pass by itself. Explicit no-current-or-future sponsorship, citizenship/clearance, a confirmed salary maximum below $170,000, or explicit software-engineering coding interviews are blockers. Return a model recommendation; deterministic gates and weights produce the final verdict. Cite every explicit or inferred claim. Omit unsupported claims and preserve unknowns.`
     },
   ];
 }
@@ -649,22 +700,24 @@ async function deepEvaluateJobs(jobs, runId) {
       }));
       continue;
     }
+    const finalized = finalizeDeepEvaluation(job, response.result);
     const evaluation = await recordEvaluation({
       jobId: job.id, runId, stage: "deep", provider: response.provider, model: response.model,
-      promptVersion: PROMPT_VERSION, verdict: response.result.verdict, score: response.result.overallScore,
-      output: response.result, usage: response.usage,
+      promptVersion: PROMPT_VERSION, verdict: finalized.verdict, score: finalized.overallScore,
+      output: finalized, usage: response.usage,
     });
     const claims = [
       ...(job.details?.sourceEvidence || []),
-      ...response.result.claims,
+      ...(finalized.claims || []),
     ];
     await replaceClaims(job.id, evaluation.id, claims);
-    const status = response.result.verdict === "apply" ? "critic_pending"
-      : response.result.verdict === "maybe" ? "needs_review" : "passed";
+    const status = finalized.verdict === "apply" ? "critic_pending"
+      : finalized.verdict === "maybe" ? "needs_review" : "passed";
     evaluated.push(await upsertJob({
       ...job, status,
       details: {
-        ...job.details, deepEvaluation: response.result, deepStatus: "complete",
+        ...job.details, deepEvaluation: finalized, deepStatus: "complete",
+        evaluationFrameworkVersion: EVALUATION_FRAMEWORK_VERSION,
         deepProvider: response.provider, deepModel: response.model, deepAttempts: response.attempts || [], research, claims,
         contactCandidates: research.contactCandidates || [],
       },
@@ -692,7 +745,7 @@ function criticMessages(job) {
   }));
   return [
     { role: "system", content: "Act as an independent skeptical career strategist. Return JSON only and use only supplied evidence. Prefer correcting an optimistic verdict over preserving model agreement." },
-    { role: "user", content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nJob and primary evaluation:\n${JSON.stringify({ title: job.title, company: job.company, description: job.description.slice(0, 8000), primary: job.details?.deepEvaluation, evidence }, null, 2)}\n\nIdentify unsupported claims, contradictions, hidden coding or eligibility risks, and whether apply|maybe|pass is justified. Treat claims with empty supporting passages as unsupported. A primarily hands-on data/software engineering role must be pass for this candidate. A US on-site/hybrid role is incompatible unless global remote evidence is explicit. Missing facts remain unknown. Return agrees, recommendedVerdict, confidence, objections, unsupportedClaims, summary under 100 words.` },
+    { role: "user", content: `Candidate profile:\n${TARGET_PROFILE.baseline}\n\nCore expertise:\n${JSON.stringify(TARGET_PROFILE.coreExpertise, null, 2)}\n\nMust-have gates:\n${JSON.stringify(TARGET_PROFILE.hardRequirements, null, 2)}\n\nJob and primary evaluation:\n${JSON.stringify({ title: job.title, company: job.company, description: job.description.slice(0, 8000), primary: job.details?.deepEvaluation, evidence }, null, 2)}\n\nChallenge unsupported gate statuses, contradictions, hidden coding-interview risk, salary interpretation, and work-authorization evidence. Do not treat public-sector context, lack of AI, lack of financial-services overlap, or lack of remote work as a core mismatch when responsibilities fit analytics or experimentation. Missing facts remain unknown and should normally produce maybe unless another gate is explicitly blocked. Return agrees, recommendedVerdict, confidence, objections, unsupportedClaims, summary under 100 words.` },
   ];
 }
 
@@ -719,9 +772,11 @@ async function criticJobs(jobs, runId) {
     });
     const primaryVerdict = job.details?.deepEvaluation?.verdict;
     const disagreement = !response.result.agrees || response.result.recommendedVerdict !== primaryVerdict;
+    const hardBlocked = (job.details?.deepEvaluation?.decision?.blockers || []).length > 0;
     reviewed.push(await upsertJob({
       ...job,
-      status: disagreement ? "needs_review"
+      status: hardBlocked ? "passed"
+        : disagreement ? "needs_review"
         : primaryVerdict === "apply" && calibration.active ? "shortlisted"
           : primaryVerdict === "pass" ? "passed" : "needs_review",
       details: {
@@ -757,7 +812,7 @@ async function draftOutreach(job, runId) {
     runId, operation: "outreach", schema: outreachSchema, maxTokens: 500,
     messages: [
       { role: "system", content: "Write a concise truthful outreach note. Return JSON only. Do not invent facts or contacts." },
-      { role: "user", content: `Candidate is an AI product founder and former American Express Data Science Manager with $400M+ ML impact, financial-services depth, production RAG, governance, and data architecture experience.\n\nJob: ${JSON.stringify({ title: job.title, company: job.company, evaluation: job.details?.deepEvaluation, evidence: job.details?.claims }, null, 2)}\n\nReturn subject and a message under 170 words. Mention STEM OPT only as 36 months of current independent work authorization with no immediate sponsorship, never as permanent authorization.` },
+      { role: "user", content: `Candidate identity: ${TARGET_PROFILE.outreachIdentity}.\n\nCandidate background:\n${TARGET_PROFILE.baseline}\n\nJob: ${JSON.stringify({ title: job.title, company: job.company, evaluation: job.details?.deepEvaluation, evidence: job.details?.claims }, null, 2)}\n\nReturn a subject and message under 170 words. Lead with the candidate experience most relevant to this role. Mention work authorization only when explicitly supported, and never imply permanent authorization.` },
     ],
   });
   if (!result.result) return job;
@@ -826,7 +881,27 @@ export async function runTriageStage({ runId, jobIds }) {
 }
 
 export async function enqueueJobsForLocalProcessing({ runId = null, jobIds = [] }) {
-  const jobs = await jobsForIds(jobIds);
+  const [currentJobs, backlog, patterns] = await Promise.all([
+    jobsForIds(jobIds),
+    listJobs({ view: "all", limit: 5000 }),
+    listTitlePatterns({ includeInactive: false }),
+  ]);
+  const rawJobs = [...new Map([
+    ...currentJobs,
+    ...backlog.filter((job) => shouldRefreshTriage(job) || shouldQueueDeepForJob(job)),
+  ].map((job) => [job.id, job])).values()];
+  const jobs = [];
+  for (const job of rawJobs) {
+    const classification = currentTitleClassification(job.title, patterns);
+    const staleOntology = job.details?.titleClassification?.ontology?.ontologyVersion
+      !== classification.titleClassification.ontology.ontologyVersion;
+    const changedFamily = job.roleFamilyId !== classification.roleFamilyId;
+    if (staleOntology || changedFamily) {
+      jobs.push(await updateJobClassification(job.id, classification));
+    } else {
+      jobs.push(job);
+    }
+  }
   const queued = [];
   for (const job of jobs) {
     const taskType = nextLocalTaskType(job);
@@ -923,6 +998,7 @@ export async function runLocalTriageEvaluation({ jobId, runId = null }) {
     status: reject ? "triage_rejected" : "deep_review_pending",
     details: {
       ...job.details, triage: evaluation, triageStatus: "complete",
+      triagePromptVersion: PROMPT_VERSION,
       triageProvider: response.provider, triageModel: response.model,
       triageAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
     },
@@ -951,20 +1027,22 @@ export async function runLocalDeepEvaluation({ jobId, runId = null }) {
     runId, operation: "local_deep_fit", maxTokens: 3500,
   });
   if (!response.result) throw new Error(`Local deep evaluation failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
+  const finalized = finalizeDeepEvaluation(job, response.result);
   const evaluation = await recordEvaluation({
     jobId: job.id, runId, stage: "deep", provider: response.provider, model: response.model,
-    promptVersion: PROMPT_VERSION, verdict: response.result.verdict, score: response.result.overallScore,
-    output: response.result, usage: response.usage,
+    promptVersion: PROMPT_VERSION, verdict: finalized.verdict, score: finalized.overallScore,
+    output: finalized, usage: response.usage,
   });
-  const claims = [...(job.details?.sourceEvidence || []), ...response.result.claims];
+  const claims = [...(job.details?.sourceEvidence || []), ...(finalized.claims || [])];
   await replaceClaims(job.id, evaluation.id, claims);
-  const status = response.result.verdict === "apply" ? "critic_pending"
-    : response.result.verdict === "maybe" ? "needs_review" : "passed";
+  const status = finalized.verdict === "apply" ? "critic_pending"
+    : finalized.verdict === "maybe" ? "needs_review" : "passed";
   return upsertJob({
     ...job,
     status,
     details: {
-      ...job.details, deepEvaluation: response.result, deepStatus: "complete",
+      ...job.details, deepEvaluation: finalized, deepStatus: "complete",
+      evaluationFrameworkVersion: EVALUATION_FRAMEWORK_VERSION,
       deepProvider: response.provider, deepModel: response.model,
       deepAttempts: [{ provider: response.provider, model: response.model, status: response.status }],
       research, claims, contactCandidates: research.contactCandidates || [],
@@ -988,10 +1066,12 @@ export async function runLocalCriticEvaluation({ jobId, runId = null }) {
   });
   const primaryVerdict = job.details.deepEvaluation.verdict;
   const disagreement = !response.result.agrees || response.result.recommendedVerdict !== primaryVerdict;
+  const hardBlocked = (job.details.deepEvaluation?.decision?.blockers || []).length > 0;
   const calibration = await getCalibrationStatus();
   return upsertJob({
     ...job,
-    status: disagreement ? "needs_review"
+    status: hardBlocked ? "passed"
+      : disagreement ? "needs_review"
       : primaryVerdict === "apply" && calibration.active ? "shortlisted"
         : primaryVerdict === "pass" ? "passed" : "needs_review",
     details: {
@@ -1013,7 +1093,7 @@ export async function runLocalOutreachDraft({ jobId, runId = null }) {
     stage: "utility", runId, operation: "local_outreach", schema: outreachSchema, maxTokens: 600,
     messages: [
       { role: "system", content: "Write a concise truthful outreach note. Return JSON only. Do not invent facts or contacts." },
-      { role: "user", content: `Candidate is an AI product founder and former American Express Data Science Manager with $400M+ ML impact, financial-services depth, production RAG, governance, and data architecture experience.\n\nJob: ${JSON.stringify({ title: job.title, company: job.company, evaluation: job.details?.deepEvaluation, evidence: job.details?.claims }, null, 2)}\n\nReturn subject and a message under 170 words. Mention work authorization only when supported by the candidate profile; do not imply permanent authorization.` },
+      { role: "user", content: `Candidate identity: ${TARGET_PROFILE.outreachIdentity}.\n\nCandidate background:\n${TARGET_PROFILE.baseline}\n\nJob: ${JSON.stringify({ title: job.title, company: job.company, evaluation: job.details?.deepEvaluation, evidence: job.details?.claims }, null, 2)}\n\nReturn a subject and message under 170 words. Lead with the candidate experience most relevant to this role. Mention work authorization only when explicitly supported, and never imply permanent authorization.` },
     ],
   });
   if (!response.result) throw new Error(`Local outreach drafting failed: ${response.status}${response.error ? ` (${response.error})` : ""}`);
@@ -1069,13 +1149,14 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
         ...job.details,
         triage: evaluation,
         triageStatus: "complete",
+        triagePromptVersion: PROMPT_VERSION,
         triageProvider: evaluationBase.provider,
         triageModel: model,
         triageAttempts: [{ provider: evaluationBase.provider, model, status: "live" }],
       },
     });
   } else if (task.taskType === "deep") {
-    const result = parsed.evaluation;
+    const result = finalizeDeepEvaluation(job, parsed.evaluation);
     const evaluation = await recordEvaluation({
       ...evaluationBase,
       id: deterministicWorkerEvaluationId(task.taskKey, "deep"),
@@ -1099,6 +1180,7 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
         evidenceExtraction: parsed.extraction,
         deepEvaluation: result,
         deepStatus: "complete",
+        evaluationFrameworkVersion: EVALUATION_FRAMEWORK_VERSION,
         deepProvider: evaluationBase.provider,
         deepModel: model,
         deepAttempts: [{ provider: evaluationBase.provider, model, status: "live" }],
@@ -1120,11 +1202,13 @@ export async function applyWindowsWorkerResult({ task, output, resultId, model =
       output: result,
     });
     const disagreement = !result.agrees || result.recommendedVerdict !== job.details.deepEvaluation.verdict;
+    const hardBlocked = (job.details.deepEvaluation?.decision?.blockers || []).length > 0;
     const calibration = await getCalibrationStatus();
     const strongCandidate = !disagreement && result.recommendedVerdict === "apply";
     updated = await upsertJob({
       ...job,
-      status: disagreement ? "needs_review"
+      status: hardBlocked ? "passed"
+        : disagreement ? "needs_review"
         : strongCandidate && calibration.active ? "shortlisted"
           : result.recommendedVerdict === "pass" ? "passed" : "needs_review",
       details: {
@@ -1592,5 +1676,3 @@ export async function executeJobSearchRun({ runId, trigger = "manual", slot = "m
     throw error;
   }
 }
-
-export { PROMPT_VERSION };

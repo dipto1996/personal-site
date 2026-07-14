@@ -1,4 +1,4 @@
-const ONTOLOGY_VERSION = "2026-07-11.v1";
+const ONTOLOGY_VERSION = "2026-07-14.analytics-first-v2";
 
 const PHRASE_NORMALIZATIONS = [
   [/\bartificial intelligence\b/g, "ai"],
@@ -70,7 +70,10 @@ export const FUNCTION_CONCEPTS = [
       "analytics", "data analytics", "data analysis", "advanced analytics",
       "decision analytics", "risk analytics", "product analytics", "marketing analytics",
       "business intelligence", "decision intelligence", "data insights", "insights and analytics",
-      "measurement science", "quantitative analytics",
+      "measurement science", "quantitative analytics", "customer analytics", "commercial analytics",
+      "strategy analytics", "performance analytics", "growth analytics", "digital analytics",
+      "revenue analytics", "sales analytics", "operations analytics", "business insights",
+      "customer insights", "commercial insights", "marketing insights", "decision support",
     ),
   },
   {
@@ -79,7 +82,9 @@ export const FUNCTION_CONCEPTS = [
     phrases: phrase(
       "data science", "decision science", "applied science", "product science",
       "behavioral science", "experimentation science", "advanced analytic",
-      "statistical science", "machine learning science", "causal inference",
+      "statistical science", "machine learning science", "causal inference", "marketing science",
+      "customer science", "growth data science", "marketing data science", "measurement",
+      "experimentation", "ab testing", "multivariate testing", "conversion optimization",
     ),
   },
   {
@@ -88,7 +93,8 @@ export const FUNCTION_CONCEPTS = [
     phrases: phrase(
       "ai product", "genai product", "ml product", "data product", "data products",
       "ai platform", "ml platform", "intelligence product", "decision product",
-      "product experimentation", "product insights", "product data science",
+      "product experimentation", "product insights", "product data science", "analytics product",
+      "data capabilities", "decisioning product", "insights product",
     ),
   },
   {
@@ -99,6 +105,8 @@ export const FUNCTION_CONCEPTS = [
       "ai transformation", "data transformation", "digital transformation",
       "decision strategy", "credit strategy", "risk strategy", "data commercialization",
       "ai commercialization", "data and ai", "analytics and strategy", "strategy and analytics",
+      "commercial strategy", "customer strategy", "marketing strategy", "acquisition strategy",
+      "retention strategy", "lifecycle strategy", "growth strategy",
     ),
   },
   {
@@ -115,7 +123,8 @@ export const FUNCTION_CONCEPTS = [
     familyId: "data_ai_strategy",
     phrases: phrase(
       "data architecture", "analytics architecture", "ai architecture", "enterprise data",
-      "data platform", "analytics platform", "data engineering", "analytics engineering",
+      "data platform", "analytics platform",
+      "data engineering", "analytics engineering", "machine learning engineering",
       "data management", "business systems", "decision systems", "data ecosystem",
       "modern data stack", "data enablement", "analytics enablement",
     ),
@@ -127,7 +136,8 @@ export const FUNCTION_CONCEPTS = [
       "strategy and operations", "business strategy", "business analytics", "business analysis",
       "business operations", "product operations", "ai operations", "data operations",
       "chief of staff", "founder office", "founders office", "decision support",
-      "revenue strategy", "growth strategy", "operating strategy",
+      "revenue strategy", "growth strategy", "operating strategy", "bizops",
+      "strategic planning", "performance management", "organizational improvement",
     ),
   },
   {
@@ -157,8 +167,25 @@ export const SENIORITY_CONCEPTS = [
   { id: "head", phrases: phrase("head", "global head", "functional head") },
   { id: "executive", phrases: phrase("vp", "svp", "evp", "chief", "general manager", "gm") },
   { id: "lead", phrases: phrase("lead", "global lead", "practice lead", "portfolio lead", "program lead") },
-  { id: "strategic_ic", phrases: phrase("principal", "senior principal", "staff", "senior staff", "fellow") },
+  { id: "senior_ic", phrases: phrase("senior", "principal", "senior principal", "staff", "senior staff", "fellow", "advisor", "consultant") },
   { id: "operator", phrases: phrase("owner", "operator", "founder in residence", "executive in residence") },
+];
+
+const EXCLUDED_PRIMARY_FUNCTIONS = [
+  {
+    id: "software_engineering",
+    phrases: phrase(
+      "software engineer", "backend engineer", "frontend engineer", "full stack engineer",
+      "infrastructure engineer", "site reliability engineer", "developer", "devops engineer",
+    ),
+  },
+  {
+    id: "data_engineering_ic",
+    phrases: phrase(
+      "data engineer", "analytics engineer", "machine learning engineer", "ml engineer",
+      "data platform engineer", "business intelligence developer",
+    ),
+  },
 ];
 
 const SPECIALIST_EXCEPTIONS = [
@@ -190,12 +217,16 @@ export function classifyCandidateTitle(title) {
   const normalizedTitle = normalizeIntelligenceTitle(title);
   const functionMatches = conceptMatches(normalizedTitle, FUNCTION_CONCEPTS);
   const seniorityMatches = conceptMatches(normalizedTitle, SENIORITY_CONCEPTS);
+  const excludedMatches = conceptMatches(normalizedTitle, EXCLUDED_PRIMARY_FUNCTIONS);
   const specialist = SPECIALIST_EXCEPTIONS.find((item) => (
     item.phrases.some((candidate) => containsPhrase(normalizedTitle, candidate))
   ));
   const distinctFunctionConcepts = new Set(functionMatches.map((item) => item.id)).size;
-  const standardMatch = functionMatches.length > 0 && seniorityMatches.length > 0;
-  const exploratoryMatch = distinctFunctionConcepts >= 2;
+  const leadershipOverride = seniorityMatches.some((item) => ["manager", "director", "head", "executive"].includes(item.id))
+    && functionMatches.some((item) => ["analytics_insights", "data_decision_science", "ai_data_product", "data_ai_strategy", "data_platform_architecture"].includes(item.id));
+  const excludedPrimaryFunction = excludedMatches.length > 0 && !leadershipOverride;
+  const standardMatch = !excludedPrimaryFunction && functionMatches.length > 0 && seniorityMatches.length > 0;
+  const exploratoryMatch = !excludedPrimaryFunction && distinctFunctionConcepts >= 2;
   const eligible = Boolean(standardMatch || specialist || exploratoryMatch);
   const familyId = standardMatch ? chooseFamily(functionMatches) : specialist?.familyId || chooseFamily(functionMatches);
 
@@ -208,22 +239,25 @@ export function classifyCandidateTitle(title) {
     familyId,
     functionConcepts: functionMatches.map((item) => ({ id: item.id, familyId: item.familyId, phrases: item.matchedPhrases })),
     seniorityConcepts: seniorityMatches.map((item) => ({ id: item.id, phrases: item.matchedPhrases })),
+    excludedConcepts: excludedMatches.map((item) => ({ id: item.id, phrases: item.matchedPhrases })),
     reason: eligible
       ? standardMatch ? "Matched both target function and seniority." : specialist ? "Explicit target-role exception." : "Matched multiple target functions."
-      : "Did not match both a target function and a target seniority concept.",
+      : excludedPrimaryFunction
+        ? "Primary title is an excluded engineering implementation function."
+        : "Did not match both a target function and a target seniority concept.",
   };
 }
 
 export function buildBroadSearchShards() {
   return [
-    { id: "analytics", query: '("analytics" OR "data analysis" OR "business intelligence" OR "decision intelligence" OR "insights")' },
-    { id: "science", query: '("data science" OR "decision science" OR "applied science" OR "product scientist" OR "causal inference")' },
-    { id: "ai-data-product", query: '("AI product" OR "GenAI product" OR "ML product" OR "data product" OR "AI platform")' },
-    { id: "strategy", query: '("data strategy" OR "AI strategy" OR "analytics strategy" OR "AI transformation" OR "digital transformation")' },
-    { id: "governance-risk", query: '("AI governance" OR "responsible AI" OR "model risk" OR "data governance" OR "AI risk")' },
-    { id: "architecture-platform", query: '("data architecture" OR "data platform" OR "data engineering" OR "analytics engineering" OR "data management")' },
-    { id: "business-operator", query: '("strategy and operations" OR "business analytics" OR "chief of staff" OR "AI operator" OR "context engineer")' },
-    { id: "finserv", query: '("credit decisioning" OR "risk analytics" OR "fraud strategy" OR "payments analytics" OR "underwriting analytics")' },
+    { id: "analytics", query: '("Analytics Manager" OR "Senior Analytics Manager" OR "Director of Analytics" OR "Head of Analytics" OR "Analytics Lead" OR "Business Intelligence Manager")' },
+    { id: "science", query: '("Data Science Manager" OR "Manager of Data Science" OR "Director of Data Science" OR "Decision Science Manager" OR "Product Scientist")' },
+    { id: "product-experimentation", query: '("Product Analytics Manager" OR "Product Analytics Lead" OR "Experimentation Lead" OR "Experimentation Manager" OR "Measurement Lead" OR "Growth Data Science")' },
+    { id: "marketing-customer", query: '("Marketing Analytics Manager" OR "Customer Analytics Manager" OR "Commercial Analytics" OR "Customer Insights Lead" OR "Marketing Science Lead" OR "Retention Analytics")' },
+    { id: "data-product", query: '("Data Product Manager" OR "Data Products Lead" OR "Analytics Product Manager" OR "Decision Products Lead" OR "Data Strategy Director" OR "data engineering")' },
+    { id: "strategy", query: '("Strategy and Analytics" OR "Analytics Strategy" OR "Business Manager" OR "BizOps Analytics" OR "Commercial Strategy Manager" OR "Performance Analytics Manager")' },
+    { id: "ai-product-operator", query: '("AI Product Manager" OR "AI Product Lead" OR "AI Strategy Lead" OR "AI Operator" OR "AI Enablement Lead" OR "AI Governance Lead")' },
+    { id: "finserv", query: '(fintech OR payments OR credit OR banking OR insurance OR lending) ("Analytics Manager" OR "Data Science Manager" OR "Product Analytics" OR "Strategy and Analytics" OR "Data Product")' },
   ];
 }
 

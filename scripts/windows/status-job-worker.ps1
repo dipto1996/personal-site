@@ -30,6 +30,9 @@ try {
   modelHealthy = $modelHealth
   endpoint = if ($config) { $config.endpoint } else { $null }
   model = if ($config) { $config.modelName } else { $null }
+  thermalProfile = if ($config -and $null -ne $config.thermalProfile) { $config.thermalProfile } else { 'legacy' }
+  gpuLayers = if ($config -and $null -ne $config.gpuLayers) { $config.gpuLayers } else { $null }
+  cpuThreads = if ($config -and $null -ne $config.cpuThreads) { $config.cpuThreads } else { $null }
   contextTokens = if ($config) { $config.contextTokens } else { $null }
   concurrency = if ($config) { $config.concurrency } else { $null }
   activeMinutes = if ($config -and $null -ne $config.activeMinutes) { $config.activeMinutes } else { 120 }

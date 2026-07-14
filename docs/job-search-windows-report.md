@@ -62,7 +62,7 @@ and 0-100 scores must be coherent. One bounded correction pass is allowed for in
 citations, or score/verdict contradictions; unresolved output fails the lease and is not persisted.
 
 `llama-server` is spawned only after a task is claimed and both memory guards pass. It binds to
-`127.0.0.1`, uses context 8192, concurrency 1, four CPU threads, at most 20 Vulkan GPU layers, and below-normal process
+`127.0.0.1`, uses context 8192, concurrency 1, two CPU threads, eight Vulkan GPU layers, and below-normal process
 priority. Only the worker-owned model process is stopped, after five idle minutes, at worker exit, or during the mandatory cooldown.
 No firewall rule, tunnel, VPN, or public listener is created.
 

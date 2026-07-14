@@ -50,7 +50,7 @@ The counts are a point-in-time snapshot and can increase as discovery continues.
 Inspect Windows RAM, CPU, GPU, and VRAM before downloading a model.
 
 - Use Qwen3-4B Q4_K_M with an 8K context for this measured 16 GB / 6 GB VRAM host.
-- Offload at most 20 layers to the NVIDIA GPU and use four CPU threads to preserve driver and desktop headroom.
+- Use the low-heat profile: offload eight layers to the NVIDIA GPU and use two CPU threads to preserve thermal, driver, and desktop headroom.
 - Do not use a local model on an 8 GB machine.
 - Never select or download a larger model automatically.
 

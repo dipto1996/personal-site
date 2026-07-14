@@ -112,7 +112,8 @@ The measured Windows host is approved only for `Qwen3-4B-Q4_K_M`, context 8192, 
 resource guard rejects Qwen3-8B and Qwen3-14B on this host. `llama-server` binds to `127.0.0.1`, runs at
 below-normal priority, starts only after a claimed task, and stops after five idle minutes, worker exit, or
 the 78 C runtime temperature limit. Startup is blocked at 68 C. The 120-minute active/60-minute cooldown
-schedule is a maximum; temperature safety may begin cooldown earlier.
+schedule is a maximum; temperature safety may begin cooldown earlier. The measured host uses the low-heat
+profile: eight GPU layers, two CPU threads, and one task at a time.
 
 Useful Windows commands:
 

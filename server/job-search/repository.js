@@ -580,15 +580,18 @@ export async function getRun(runId) {
   return row || null;
 }
 
-export async function listRuns(limit = 20) {
+export async function listRuns(limit = 20, offset = 0) {
   await ensureJobSearchRepository();
+  const boundedLimit = Math.max(0, Math.min(500, Number(limit) || 20));
+  const boundedOffset = Math.max(0, Number(offset) || 0);
   if (!hasDatabase()) {
-    return (await readLocal()).runs.slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit);
+    return (await readLocal()).runs.slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .slice(boundedOffset, boundedOffset + boundedLimit);
   }
   const sql = getSql();
   return sql`SELECT id, trigger, status, phase, stats, providers, errors,
     started_at AS "startedAt", completed_at AS "completedAt", updated_at AS "updatedAt"
-    FROM js_runs ORDER BY started_at DESC LIMIT ${limit}`;
+    FROM js_runs ORDER BY started_at DESC LIMIT ${boundedLimit} OFFSET ${boundedOffset}`;
 }
 
 export async function upsertJob(job) {
@@ -750,9 +753,13 @@ function matchesDecisionSource(job, decisionSource) {
 
 export async function listJobs({ view = "inbox", limit = 500, offset = 0, decisionSource = "all", roleFamily = "all" } = {}) {
   await ensureJobSearchRepository();
+  const knownViews = new Set(["all", "all_candidates", "relevant", "uncertain", "clear_mismatch", "shortlist", "needs_review", "passed", "expired", "inbox"]);
+  const normalizedView = knownViews.has(view) ? view : "inbox";
+  const normalizedDecisionSource = ["owner", "model"].includes(decisionSource) ? decisionSource : "all";
+  const normalizedRoleFamily = String(roleFamily || "all");
   const filter = (job) => matchesJobView(job, view)
-    && matchesDecisionSource(job, decisionSource)
-    && (roleFamily === "all" || job.roleFamilyId === roleFamily);
+    && matchesDecisionSource(job, normalizedDecisionSource)
+    && (normalizedRoleFamily === "all" || (job.roleFamilyId || "exploratory") === normalizedRoleFamily);
   const boundedLimit = Math.max(0, Math.min(5000, Number(limit) || 500));
   const boundedOffset = Math.max(0, Number(offset) || 0);
   if (!hasDatabase()) {
@@ -764,8 +771,27 @@ export async function listJobs({ view = "inbox", limit = 500, offset = 0, decisi
     source_provider AS "sourceProvider", source_query AS "sourceQuery", content_hash AS "contentHash",
     role_family_id AS "roleFamilyId", status, disposition, details, first_seen_at AS "firstSeenAt",
     last_seen_at AS "lastSeenAt", created_at AS "createdAt", updated_at AS "updatedAt"
-    FROM js_jobs ORDER BY updated_at DESC LIMIT 5000`;
-  return rows.filter(filter).slice(boundedOffset, boundedOffset + boundedLimit);
+    FROM js_jobs
+    WHERE source_provider <> 'sample'
+      AND (
+        ${normalizedView} IN ('all', 'all_candidates')
+        OR (${normalizedView}='relevant' AND details #>> '{triage,relevance}'='relevant')
+        OR (${normalizedView}='uncertain' AND details #>> '{triage,relevance}'='uncertain')
+        OR (${normalizedView}='clear_mismatch' AND (details #>> '{triage,relevance}'='irrelevant' OR status='triage_rejected'))
+        OR (${normalizedView}='shortlist' AND (status='shortlisted' OR disposition='apply'))
+        OR (${normalizedView}='needs_review' AND (status IN ('needs_review','deep_review_pending','triage_pending','local_triage_pending') OR disposition='maybe'))
+        OR (${normalizedView}='passed' AND (status IN ('passed','triage_rejected') OR disposition='pass'))
+        OR (${normalizedView}='expired' AND status='expired')
+        OR (${normalizedView}='inbox' AND status NOT IN ('passed','expired') AND disposition IS DISTINCT FROM 'pass')
+      )
+      AND (
+        ${normalizedDecisionSource}='all'
+        OR (${normalizedDecisionSource}='owner' AND disposition IS NOT NULL)
+        OR (${normalizedDecisionSource}='model' AND disposition IS NULL)
+      )
+      AND (${normalizedRoleFamily}='all' OR COALESCE(role_family_id, 'exploratory')=${normalizedRoleFamily})
+    ORDER BY updated_at DESC LIMIT ${boundedLimit} OFFSET ${boundedOffset}`;
+  return rows;
 }
 
 export async function upsertDiscoveryLead(lead) {
@@ -859,22 +885,29 @@ export async function recordDiscoveryLeads(leads = []) {
   return [...records.values()];
 }
 
-export async function listDiscoveryLeads({ status = "", limit = 1000 } = {}) {
+export async function listDiscoveryLeads({ status = "", limit = 1000, offset = 0, includeRaw = true, excludeSamples = false } = {}) {
   await ensureJobSearchRepository();
+  const boundedLimit = Math.max(0, Math.min(5000, Number(limit) || 1000));
+  const boundedOffset = Math.max(0, Number(offset) || 0);
   if (!hasDatabase()) {
     return (await readLocal()).discoveryLeads
-      .filter((lead) => !status || lead.status === status)
+      .filter((lead) => (!status || lead.status === status) && (!excludeSamples || lead.sourceProvider !== "sample"))
       .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))
-      .slice(0, limit);
+      .slice(boundedOffset, boundedOffset + boundedLimit)
+      .map((lead) => includeRaw ? lead : { ...lead, raw: {} });
   }
   const sql = getSql();
   const rows = await sql`SELECT id, dedupe_key AS "dedupeKey", run_id AS "runId",
     external_id AS "externalId", url, title, company, location, posted_at AS "postedAt",
     source_provider AS "sourceProvider", source_query AS "sourceQuery", snippet, status,
-    ontology, raw, first_seen_at AS "firstSeenAt", last_seen_at AS "lastSeenAt",
+    ontology, CASE WHEN ${includeRaw} THEN raw ELSE '{}'::jsonb END AS raw,
+    first_seen_at AS "firstSeenAt", last_seen_at AS "lastSeenAt",
     created_at AS "createdAt", updated_at AS "updatedAt"
-    FROM js_discovery_leads ORDER BY last_seen_at DESC LIMIT ${limit}`;
-  return rows.filter((lead) => !status || lead.status === status);
+    FROM js_discovery_leads
+    WHERE (${status}='' OR status=${status})
+      AND (${excludeSamples}=FALSE OR source_provider <> 'sample')
+    ORDER BY last_seen_at DESC LIMIT ${boundedLimit} OFFSET ${boundedOffset}`;
+  return rows;
 }
 
 export async function listTitleObservations({ unmatchedOnly = false, limit = 100 } = {}) {
@@ -1198,10 +1231,13 @@ export async function getUsageSummary(date = new Date()) {
     rows = (await readLocal()).providerUsage.filter((item) => item.occurredAt >= start && item.occurredAt < end);
   } else {
     const sql = getSql();
-    rows = await sql`SELECT provider, operation, model, input_tokens AS "inputTokens",
-      output_tokens AS "outputTokens", request_count AS "requestCount",
-      estimated_cost_usd AS "estimatedCostUsd", occurred_at AS "occurredAt"
-      FROM js_provider_usage WHERE occurred_at >= ${start} AND occurred_at < ${end}`;
+    rows = await sql`SELECT provider,
+      SUM(input_tokens)::bigint AS "inputTokens",
+      SUM(output_tokens)::bigint AS "outputTokens",
+      SUM(request_count)::bigint AS "requestCount",
+      SUM(estimated_cost_usd)::double precision AS "estimatedCostUsd"
+      FROM js_provider_usage WHERE occurred_at >= ${start} AND occurred_at < ${end}
+      GROUP BY provider`;
   }
   const byProvider = {};
   rows.forEach((row) => {
@@ -1226,10 +1262,13 @@ export async function getProviderUsageSince(provider, sinceIso) {
     ));
   } else {
     const sql = getSql();
-    rows = await sql`SELECT provider, operation, model, input_tokens AS "inputTokens",
-      output_tokens AS "outputTokens", request_count AS "requestCount",
-      estimated_cost_usd AS "estimatedCostUsd", occurred_at AS "occurredAt"
-      FROM js_provider_usage WHERE provider=${provider} AND occurred_at >= ${sinceIso}`;
+    rows = await sql`SELECT provider, model,
+      SUM(input_tokens)::bigint AS "inputTokens",
+      SUM(output_tokens)::bigint AS "outputTokens",
+      SUM(request_count)::bigint AS "requestCount",
+      SUM(estimated_cost_usd)::double precision AS "estimatedCostUsd"
+      FROM js_provider_usage WHERE provider=${provider} AND occurred_at >= ${sinceIso}
+      GROUP BY provider, model`;
   }
   const byModel = {};
   rows.forEach((row) => {
@@ -1778,18 +1817,49 @@ export async function canSpend(provider, estimatedCostUsd) {
 }
 
 export async function getCalibrationStatus() {
-  const jobs = await listJobs({ view: "all", limit: 2000 });
-  const labelled = jobs.filter((job) => Boolean(job.disposition));
-  const ranked = labelled
-    .filter((job) => job.details?.deepEvaluation)
-    .sort((left, right) => (right.details.deepEvaluation.overallScore || 0) - (left.details.deepEvaluation.overallScore || 0));
-  const topTen = ranked.slice(0, 10);
+  let labelled;
+  let topTen;
+  let positives;
+  let falseRejected;
+  if (!hasDatabase()) {
+    const jobs = await listJobs({ view: "all", limit: 2000 });
+    labelled = jobs.filter((job) => Boolean(job.disposition));
+    topTen = labelled
+      .filter((job) => job.details?.deepEvaluation)
+      .sort((left, right) => (right.details.deepEvaluation.overallScore || 0) - (left.details.deepEvaluation.overallScore || 0))
+      .slice(0, 10);
+    positives = labelled.filter((job) => job.disposition === "apply");
+    falseRejected = positives.filter((job) => job.details?.deepEvaluation?.verdict === "pass");
+  } else {
+    await ensureJobSearchRepository();
+    const sql = getSql();
+    const [statsRows, rankedRows] = await Promise.all([
+      sql`SELECT
+        COUNT(*) FILTER (WHERE disposition IS NOT NULL)::int AS labelled,
+        COUNT(*) FILTER (WHERE disposition='apply')::int AS positives,
+        COUNT(*) FILTER (WHERE disposition='apply' AND details #>> '{deepEvaluation,verdict}'='pass')::int AS "falseRejected"
+        FROM js_jobs WHERE source_provider <> 'sample'`,
+      sql`SELECT disposition, details #> '{deepEvaluation}' AS "deepEvaluation",
+        COALESCE(details #> '{claims}', '[]'::jsonb) AS claims
+        FROM js_jobs
+        WHERE source_provider <> 'sample' AND disposition IS NOT NULL
+          AND details ? 'deepEvaluation'
+        ORDER BY COALESCE((details #>> '{deepEvaluation,overallScore}')::double precision, 0) DESC
+        LIMIT 10`,
+    ]);
+    const stats = statsRows[0] || {};
+    labelled = { length: Number(stats.labelled) || 0 };
+    positives = { length: Number(stats.positives) || 0 };
+    falseRejected = { length: Number(stats.falseRejected) || 0 };
+    topTen = rankedRows.map((row) => ({
+      disposition: row.disposition,
+      details: { deepEvaluation: row.deepEvaluation, claims: row.claims || [] },
+    }));
+  }
   const precision = topTen.length === 10
     ? topTen.filter((job) => job.disposition === "apply").length / 10
     : 0;
-  const positives = labelled.filter((job) => job.disposition === "apply");
-  const falseRejected = positives.filter((job) => job.details?.deepEvaluation?.verdict === "pass").length;
-  const falseRejectionRate = positives.length ? falseRejected / positives.length : 1;
+  const falseRejectionRate = positives.length ? falseRejected.length / positives.length : 1;
   const materialClaim = /(compensation|salary|location|remote|visa|sponsor|authorization|work_authorization)/i;
   const materialClaims = topTen.flatMap((job) => job.details?.claims || [])
     .filter((claim) => materialClaim.test(claim.claimType || "") && claim.evidenceType !== "unknown");
@@ -1804,6 +1874,193 @@ export async function getCalibrationStatus() {
     precisionTopTen: precision,
     falseRejectionRate,
     citationsComplete,
+  };
+}
+
+function normalizedJobView(view) {
+  return ["all", "all_candidates", "relevant", "uncertain", "clear_mismatch", "shortlist", "needs_review", "passed", "expired", "inbox"].includes(view)
+    ? view : "inbox";
+}
+
+async function getDatabaseJobCounts() {
+  const sql = getSql();
+  const [row] = await sql`SELECT
+    COUNT(*)::int AS total,
+    COUNT(*) FILTER (WHERE details #>> '{triage,relevance}'='relevant')::int AS relevant,
+    COUNT(*) FILTER (WHERE details #>> '{triage,relevance}'='uncertain')::int AS uncertain,
+    COUNT(*) FILTER (WHERE details #>> '{triage,relevance}'='irrelevant' OR status='triage_rejected')::int AS "clearMismatches",
+    COUNT(*) FILTER (WHERE status='shortlisted' OR disposition='apply')::int AS shortlist,
+    COUNT(*) FILTER (WHERE status IN ('needs_review','deep_review_pending','triage_pending','local_triage_pending') OR disposition='maybe')::int AS "needsReview",
+    COUNT(*) FILTER (WHERE status IN ('passed','triage_rejected') OR disposition='pass')::int AS passed,
+    COUNT(*) FILTER (WHERE status='expired')::int AS expired,
+    COUNT(*) FILTER (WHERE status NOT IN ('passed','expired') AND disposition IS DISTINCT FROM 'pass')::int AS inbox,
+    COUNT(*) FILTER (WHERE disposition IS NOT NULL)::int AS labelled
+    FROM js_jobs WHERE source_provider <> 'sample'`;
+  return Object.fromEntries(Object.entries(row || {}).map(([key, value]) => [key, Number(value) || 0]));
+}
+
+async function getDatabaseDiscoveryCounts() {
+  const sql = getSql();
+  const [row] = await sql`SELECT
+    COUNT(*)::int AS total,
+    COUNT(*) FILTER (WHERE status IN ('extraction_pending','metadata_pending'))::int AS "extractionPending",
+    COUNT(*) FILTER (WHERE status='filtered_title')::int AS "titleFiltered"
+    FROM js_discovery_leads WHERE source_provider <> 'sample'`;
+  return Object.fromEntries(Object.entries(row || {}).map(([key, value]) => [key, Number(value) || 0]));
+}
+
+async function getDatabaseViewStats({ view, decisionSource, roleFamily }) {
+  const sql = getSql();
+  const normalizedView = normalizedJobView(view);
+  const normalizedDecisionSource = ["owner", "model"].includes(decisionSource) ? decisionSource : "all";
+  const normalizedRoleFamily = String(roleFamily || "all");
+  const [countsRows, familyRows] = await Promise.all([
+    sql`SELECT
+      COUNT(*)::int AS "all",
+      COUNT(*) FILTER (WHERE disposition IS NOT NULL)::int AS owner,
+      COUNT(*) FILTER (WHERE disposition IS NULL)::int AS model,
+      COUNT(*) FILTER (WHERE
+        ${normalizedDecisionSource}='all'
+        OR (${normalizedDecisionSource}='owner' AND disposition IS NOT NULL)
+        OR (${normalizedDecisionSource}='model' AND disposition IS NULL)
+      )::int AS "selectedTotal"
+      FROM js_jobs WHERE source_provider <> 'sample'
+        AND (
+          ${normalizedView} IN ('all', 'all_candidates')
+          OR (${normalizedView}='relevant' AND details #>> '{triage,relevance}'='relevant')
+          OR (${normalizedView}='uncertain' AND details #>> '{triage,relevance}'='uncertain')
+          OR (${normalizedView}='clear_mismatch' AND (details #>> '{triage,relevance}'='irrelevant' OR status='triage_rejected'))
+          OR (${normalizedView}='shortlist' AND (status='shortlisted' OR disposition='apply'))
+          OR (${normalizedView}='needs_review' AND (status IN ('needs_review','deep_review_pending','triage_pending','local_triage_pending') OR disposition='maybe'))
+          OR (${normalizedView}='passed' AND (status IN ('passed','triage_rejected') OR disposition='pass'))
+          OR (${normalizedView}='expired' AND status='expired')
+          OR (${normalizedView}='inbox' AND status NOT IN ('passed','expired') AND disposition IS DISTINCT FROM 'pass')
+        )
+        AND (${normalizedRoleFamily}='all' OR COALESCE(role_family_id, 'exploratory')=${normalizedRoleFamily})`,
+    sql`SELECT COALESCE(role_family_id, 'exploratory') AS id,
+      MAX(COALESCE(NULLIF(details #>> '{titleClassification,familyLabel}', ''), role_family_id, 'Exploratory')) AS label,
+      COUNT(*)::int AS count
+      FROM js_jobs WHERE source_provider <> 'sample'
+        AND (
+          ${normalizedView} IN ('all', 'all_candidates')
+          OR (${normalizedView}='relevant' AND details #>> '{triage,relevance}'='relevant')
+          OR (${normalizedView}='uncertain' AND details #>> '{triage,relevance}'='uncertain')
+          OR (${normalizedView}='clear_mismatch' AND (details #>> '{triage,relevance}'='irrelevant' OR status='triage_rejected'))
+          OR (${normalizedView}='shortlist' AND (status='shortlisted' OR disposition='apply'))
+          OR (${normalizedView}='needs_review' AND (status IN ('needs_review','deep_review_pending','triage_pending','local_triage_pending') OR disposition='maybe'))
+          OR (${normalizedView}='passed' AND (status IN ('passed','triage_rejected') OR disposition='pass'))
+          OR (${normalizedView}='expired' AND status='expired')
+          OR (${normalizedView}='inbox' AND status NOT IN ('passed','expired') AND disposition IS DISTINCT FROM 'pass')
+        )
+      GROUP BY COALESCE(role_family_id, 'exploratory') ORDER BY label`,
+  ]);
+  const counts = countsRows[0] || {};
+  return {
+    decisionCounts: {
+      all: Number(counts.all) || 0,
+      owner: Number(counts.owner) || 0,
+      model: Number(counts.model) || 0,
+    },
+    selectedTotal: Number(counts.selectedTotal) || 0,
+    roleFamilies: familyRows.map((row) => ({ id: row.id, label: row.label, count: Number(row.count) || 0 })),
+  };
+}
+
+async function getDatabaseRepositoryDashboard(options) {
+  await ensureJobSearchRepository();
+  const view = options.view || "inbox";
+  const pageSize = Math.max(1, Math.min(10, Number(options.pageSize) || 10));
+  const requestedPage = Math.max(1, Number(options.page) || 1);
+  const decisionSource = ["owner", "model"].includes(options.decisionSource) ? options.decisionSource : "all";
+  const roleFamily = String(options.roleFamily || "all");
+  const sql = getSql();
+  const [jobCounts, discoveryCounts, runCountRows, patterns, usage, calibration, localProcessing, viewStats] = await Promise.all([
+    getDatabaseJobCounts(),
+    getDatabaseDiscoveryCounts(),
+    sql`SELECT COUNT(*)::int AS count FROM js_runs`,
+    listTitlePatterns(),
+    getUsageSummary(),
+    getCalibrationStatus(),
+    getLocalWorkerStatus(),
+    getDatabaseViewStats({ view, decisionSource, roleFamily }),
+  ]);
+  const runsTotal = Number(runCountRows[0]?.count) || 0;
+  const orderedPatterns = view === "taxonomy"
+    ? [...patterns.filter((pattern) => pattern.status === "proposed"), ...patterns.filter((pattern) => pattern.status === "active")]
+    : [];
+  const total = view === "discovery" ? discoveryCounts.total
+    : view === "taxonomy" ? orderedPatterns.length
+      : view === "runs" ? runsTotal
+        : viewStats.selectedTotal;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(requestedPage, totalPages);
+  const offset = (currentPage - 1) * pageSize;
+  let jobs = [];
+  let runs = [];
+  let discoveryLeads = [];
+  let pagedPatterns = [];
+  if (view === "discovery") {
+    discoveryLeads = await listDiscoveryLeads({ limit: pageSize, offset, includeRaw: false, excludeSamples: true });
+  } else if (view === "taxonomy") {
+    pagedPatterns = orderedPatterns.slice(offset, offset + pageSize);
+  } else if (view === "runs") {
+    runs = await listRuns(pageSize, offset);
+  } else {
+    jobs = await listJobs({ view, limit: pageSize, offset, decisionSource, roleFamily });
+  }
+  const tabCounts = {
+    discovery: discoveryCounts.total,
+    all_candidates: jobCounts.total,
+    relevant: jobCounts.relevant,
+    uncertain: jobCounts.uncertain,
+    clear_mismatch: jobCounts.clearMismatches,
+    shortlist: jobCounts.shortlist,
+    needs_review: jobCounts.needsReview,
+    passed: jobCounts.passed,
+    expired: jobCounts.expired,
+    taxonomy: patterns.filter((pattern) => ["active", "proposed"].includes(pattern.status)).length,
+    runs: runsTotal,
+  };
+  return {
+    jobs,
+    runs,
+    taxonomy: {
+      active: view === "taxonomy" ? pagedPatterns.filter((pattern) => pattern.status === "active") : [],
+      proposed: view === "taxonomy" ? pagedPatterns.filter((pattern) => pattern.status === "proposed") : [],
+      rejected: patterns.filter((pattern) => pattern.status === "rejected"),
+      totals: {
+        active: patterns.filter((pattern) => pattern.status === "active").length,
+        proposed: patterns.filter((pattern) => pattern.status === "proposed").length,
+      },
+    },
+    usage,
+    localProcessing,
+    discoveryLeads,
+    pagination: { page: currentPage, pageSize, total, totalPages },
+    filters: {
+      decisionSource,
+      roleFamily,
+      decisionCounts: ["discovery", "taxonomy", "runs"].includes(view) ? null : viewStats.decisionCounts,
+      roleFamilies: viewStats.roleFamilies,
+    },
+    tabCounts,
+    summary: {
+      total: jobCounts.total,
+      rawLeads: discoveryCounts.total,
+      extractionPending: discoveryCounts.extractionPending,
+      titleFiltered: discoveryCounts.titleFiltered,
+      inbox: jobCounts.inbox,
+      relevant: jobCounts.relevant,
+      uncertain: jobCounts.uncertain,
+      clearMismatches: jobCounts.clearMismatches,
+      shortlist: jobCounts.shortlist,
+      needsReview: jobCounts.needsReview,
+      passed: jobCounts.passed,
+      expired: jobCounts.expired,
+      labelled: jobCounts.labelled,
+      calibrationTarget: 20,
+      calibration,
+    },
   };
 }
 
@@ -1835,6 +2092,7 @@ export async function writeResearchCache({ cacheKey, company, topic, result, ttl
 
 export async function getRepositoryDashboard(input = "inbox") {
   const options = typeof input === "string" ? { view: input } : (input || {});
+  if (hasDatabase()) return getDatabaseRepositoryDashboard(options);
   const view = options.view || "inbox";
   const pageSize = Math.max(1, Math.min(10, Number(options.pageSize) || 10));
   const page = Math.max(1, Number(options.page) || 1);

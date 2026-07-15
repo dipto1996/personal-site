@@ -1914,7 +1914,7 @@ test("deep routing does not retry a truncated Groq response", async () => {
   }
 });
 
-test("deep routing falls through from Groq 20B to the independent 120B free quota", async () => {
+test("deep routing falls through from Groq 20B to 120B while the shared pool has room", async () => {
   const originalFetch = globalThis.fetch;
   process.env.GROQ_API_KEY = "test-groq";
   delete process.env.JOBSEARCH_LOCAL_LLM_BASE_URL;
@@ -1948,6 +1948,80 @@ test("deep routing falls through from Groq 20B to the independent 120B free quot
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.GROQ_API_KEY;
+  }
+});
+
+test("Groq GPT-OSS routes share one daily token pool", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+  globalThis.fetch = async () => { fetchCount += 1; return mockModelResponse({}); };
+  process.env.GROQ_API_KEY = "test-groq";
+  process.env.JOBSEARCH_GROQ_GPT_OSS_TOKENS_PER_DAY = "1000";
+  delete process.env.JOBSEARCH_LOCAL_LLM_BASE_URL;
+  delete process.env.CLOUDFLARE_ACCOUNT_ID;
+  delete process.env.CLOUDFLARE_API_TOKEN;
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.ZAI_API_KEY;
+  await repository.recordProviderUsage({
+    provider: "groq", operation: "test", model: "openai/gpt-oss-20b", inputTokens: 500, outputTokens: 100,
+  });
+  await repository.recordProviderUsage({
+    provider: "groq", operation: "test", model: "openai/gpt-oss-120b", inputTokens: 250, outputTokens: 50,
+  });
+  try {
+    const response = await providers.callDeepModel({
+      operation: "shared_pool_test",
+      schema: schemas.cloudDeepEvaluationSchema,
+      messages: [{ role: "user", content: "Evaluate this role." }],
+      maxTokens: 120,
+    });
+    assert.equal(response.status, "quota_blocked");
+    assert.equal(fetchCount, 0);
+    assert.deepEqual(response.attempts.slice(0, 2).map((attempt) => attempt.status), ["quota_blocked", "quota_blocked"]);
+    const quotas = await providers.getFreeProviderQuotaSummary();
+    assert.equal(quotas.groq.gptOssTokens, 900);
+    assert.equal(quotas.groq.gptOssTokenLimit, 1000);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.GROQ_API_KEY;
+    delete process.env.JOBSEARCH_GROQ_GPT_OSS_TOKENS_PER_DAY;
+  }
+});
+
+test("Groq daily-limit errors reconcile provider-reported consumed tokens without immediate retry", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return mockModelResponse({
+      error: { message: "Rate limit reached on tokens per day (TPD): Limit 200,000, Used 179,900, Requested 4,112. Please try again in 30m0s." },
+    }, 429);
+  };
+  process.env.GROQ_API_KEY = "test-groq";
+  process.env.JOBSEARCH_GROQ_GPT_OSS_TOKENS_PER_DAY = "180000";
+  delete process.env.JOBSEARCH_LOCAL_LLM_BASE_URL;
+  delete process.env.CLOUDFLARE_ACCOUNT_ID;
+  delete process.env.CLOUDFLARE_API_TOKEN;
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.ZAI_API_KEY;
+  try {
+    const response = await providers.callDeepModel({
+      operation: "reported_usage_test",
+      schema: schemas.cloudDeepEvaluationSchema,
+      messages: [{ role: "user", content: "Evaluate this role." }],
+      maxTokens: 1200,
+    });
+    assert.equal(response.status, "quota_blocked");
+    assert.equal(fetchCount, 1);
+    assert.equal(response.attempts[0].status, "rate_limited");
+    assert.equal(response.attempts[0].retry, 0);
+    assert.deepEqual(response.attempts.slice(1, 2).map((attempt) => attempt.status), ["quota_blocked"]);
+    const quotas = await providers.getFreeProviderQuotaSummary();
+    assert.equal(quotas.groq.gptOssTokens, 179900);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.GROQ_API_KEY;
+    delete process.env.JOBSEARCH_GROQ_GPT_OSS_TOKENS_PER_DAY;
   }
 });
 

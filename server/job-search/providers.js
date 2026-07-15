@@ -258,6 +258,33 @@ function cloudflareUsageNeurons(usage) {
   ), 0);
 }
 
+function groqTokenPool(route, usage) {
+  const gptOss = /^openai\/gpt-oss-/i.test(route.model);
+  const models = Object.entries(usage.byModel || {})
+    .filter(([model]) => gptOss ? /^openai\/gpt-oss-/i.test(model) : model === route.model);
+  return {
+    usedTokens: models.reduce((total, [, values]) => (
+      total + (Number(values.inputTokens) || 0) + (Number(values.outputTokens) || 0)
+    ), 0),
+    tokenLimit: gptOss
+      ? positiveLimit("JOBSEARCH_GROQ_GPT_OSS_TOKENS_PER_DAY", FREE_LIMITS.groqGptOssTokensPerDay)
+      : positiveLimit("JOBSEARCH_GROQ_QWEN_TOKENS_PER_DAY", FREE_LIMITS.groqQwenTokensPerDay),
+    name: gptOss ? "gpt-oss" : route.model,
+  };
+}
+
+function groqReportedUsage(message) {
+  const match = String(message || "").match(
+    /Limit\s*:?[\s`]*(\d[\d,]*)[\s\S]*?Used\s*:?[\s`]*(\d[\d,]*)[\s\S]*?Requested\s*:?[\s`]*(\d[\d,]*)/i,
+  );
+  if (!match) return null;
+  return {
+    limit: Number(match[1].replace(/,/g, "")),
+    used: Number(match[2].replace(/,/g, "")),
+    requested: Number(match[3].replace(/,/g, "")),
+  };
+}
+
 function providerConfigured(provider) {
   if (provider === "local") return Boolean(process.env.JOBSEARCH_LOCAL_LLM_BASE_URL);
   if (provider === "groq") return Boolean(process.env.GROQ_API_KEY);
@@ -290,16 +317,15 @@ async function quotaStatus(route, estimatedInputTokens, maxTokens) {
     return { allowed: used + requested <= limit, status: "quota_blocked", used, requested, limit };
   }
   const requestLimit = positiveLimit("JOBSEARCH_GROQ_REQUESTS_PER_DAY", FREE_LIMITS.groqRequestsPerDay);
-  const modelUsage = usage.byModel?.[route.model] || { inputTokens: 0, outputTokens: 0 };
-  const tokenLimit = positiveLimit("JOBSEARCH_GROQ_GPT_OSS_TOKENS_PER_DAY", FREE_LIMITS.groqGptOssTokensPerDay);
-  const usedTokens = modelUsage.inputTokens + modelUsage.outputTokens;
+  const pool = groqTokenPool(route, usage);
   return {
-    allowed: usage.requests < requestLimit && usedTokens + estimatedInputTokens + maxTokens <= tokenLimit,
+    allowed: usage.requests < requestLimit && pool.usedTokens + estimatedInputTokens + maxTokens <= pool.tokenLimit,
     status: "quota_blocked",
     used: usage.requests,
     limit: requestLimit,
-    usedTokens,
-    tokenLimit,
+    usedTokens: pool.usedTokens,
+    tokenLimit: pool.tokenLimit,
+    tokenPool: pool.name,
   };
 }
 
@@ -397,7 +423,7 @@ function modelAttempt(response, retry = 0) {
 
 function shouldRetryGroq({ stage, route, response }) {
   if (route.provider !== "groq" || !["deep", "critic"].includes(stage)) return false;
-  if (["rate_limited", "provider_error", "provider_unavailable", "timeout", "invalid_response"].includes(response.status)) {
+  if (["provider_error", "provider_unavailable", "timeout", "invalid_response"].includes(response.status)) {
     return true;
   }
   return response.status === "provider_blocked"
@@ -449,10 +475,32 @@ async function callRoute({ route, messages, schema, runId, operation, maxTokens 
       }),
     }, route.provider === "local" ? 600000 : 90000);
   } catch (error) {
-    await recordProviderUsage({ provider: route.provider, operation, model: route.model, runId, requestCount: 1 });
+    const status = classifyProviderError(error);
+    let failedInputTokens = 0;
+    let failedOutputTokens = 0;
+    if (route.provider === "groq") {
+      const reported = groqReportedUsage(error.message);
+      if (reported && Number.isFinite(quota.usedTokens)) {
+        failedInputTokens = Math.max(0, reported.used - quota.usedTokens);
+      } else if (status === "rate_limited" && /tokens per day|\bTPD\b/i.test(String(error.message || ""))) {
+        failedInputTokens = Math.max(0, (quota.tokenLimit || 0) - (quota.usedTokens || 0));
+      } else if (status === "timeout" || /failed(?:_|\s+)generation|failed to generate json/i.test(String(error.message || ""))) {
+        failedInputTokens = estimatedInputTokens;
+        failedOutputTokens = maxTokens;
+      }
+    }
+    await recordProviderUsage({
+      provider: route.provider,
+      operation,
+      model: route.model,
+      runId,
+      inputTokens: failedInputTokens,
+      outputTokens: failedOutputTokens,
+      requestCount: 1,
+    });
     return {
       result: null,
-      status: classifyProviderError(error),
+      status,
       provider: route.provider,
       model: route.model,
       error: error.message,
@@ -460,8 +508,9 @@ async function callRoute({ route, messages, schema, runId, operation, maxTokens 
   }
   const completion = completionPayload(payload);
   const inputTokens = Number(completion?.usage?.prompt_tokens) || estimatedInputTokens;
-  const outputTokens = Number(completion?.usage?.completion_tokens) || 0;
   const finishReason = completion?.choices?.[0]?.finish_reason || "unknown";
+  const outputTokens = Number(completion?.usage?.completion_tokens)
+    || (finishReason === "length" ? maxTokens : 0);
   const estimatedCostUsd = route.paid ? estimateCost(route.model, inputTokens, outputTokens) : 0;
   const usage = {
     inputTokens,
@@ -516,7 +565,7 @@ export async function callRoutedModel({ stage, messages, schema, runId, operatio
   }
   return {
     result: null,
-    status: attempts.length && attempts.every((attempt) => ["quota_blocked", "paid_fallback_disabled", "missing_key"].includes(attempt.status))
+    status: attempts.length && attempts.every((attempt) => ["quota_blocked", "rate_limited", "paid_fallback_disabled", "missing_key"].includes(attempt.status))
       ? "quota_blocked" : "providers_exhausted",
     attempts,
   };
@@ -562,6 +611,8 @@ export async function getFreeProviderQuotaSummary() {
     groq: {
       configured: providerConfigured("groq"), period: "day", requests: groq.requests,
       requestLimit: positiveLimit("JOBSEARCH_GROQ_REQUESTS_PER_DAY", FREE_LIMITS.groqRequestsPerDay),
+      gptOssTokens: groqTokenPool({ model: "openai/gpt-oss-20b" }, groq).usedTokens,
+      gptOssTokenLimit: positiveLimit("JOBSEARCH_GROQ_GPT_OSS_TOKENS_PER_DAY", FREE_LIMITS.groqGptOssTokensPerDay),
       byModel: groq.byModel,
     },
     cloudflare: {

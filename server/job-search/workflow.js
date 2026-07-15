@@ -34,7 +34,9 @@ import {
   listCompanies,
   listFeedbackExamples,
   listJobs,
+  listLocalProcessingCandidates,
   listLocalTasks,
+  listTaxonomyLabelledJobs,
   listTitleObservations,
   listTitlePatterns,
   recordDiscoveryLeads,
@@ -1039,8 +1041,7 @@ async function draftOutreach(job, runId) {
 async function proposeTaxonomy(runId) {
   const observations = await listTitleObservations({ unmatchedOnly: true, limit: 12 });
   const patterns = await listTitlePatterns();
-  const jobs = await listJobs({ view: "all", limit: 1000 });
-  const labelled = jobs.filter((job) => job.disposition);
+  const labelled = await listTaxonomyLabelledJobs(1000);
   const proposals = [];
   for (const observation of observations) {
     if (patterns.some((pattern) => pattern.expression === observation.normalizedTitle)) continue;
@@ -1100,7 +1101,11 @@ export async function runTriageStage({ runId, jobIds }) {
 export async function enqueueJobsForLocalProcessing({ runId = null, jobIds = [] }) {
   const [currentJobs, backlog, patterns] = await Promise.all([
     jobsForIds(jobIds),
-    listJobs({ view: "all", limit: 5000 }),
+    listLocalProcessingCandidates({
+      promptVersion: PROMPT_VERSION,
+      frameworkVersion: EVALUATION_FRAMEWORK_VERSION,
+      limit: 5000,
+    }),
     listTitlePatterns({ includeInactive: false }),
   ]);
   const rawJobs = [...new Map([

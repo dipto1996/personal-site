@@ -212,6 +212,41 @@ test("evaluation audit accepts a coherent current evaluator-and-critic result", 
   assert.equal(audit.sample[0].id, job.id);
 });
 
+test("evaluation audit dataset and feedback examples stay narrowly scoped", async () => {
+  const matching = await seedJob({
+    sourceId: "feedback_matching_family",
+    title: "Senior Analytics Manager",
+    roleFamilyId: "analytics_leadership",
+    disposition: "apply",
+    details: { feedbackReasons: ["other"], feedbackNote: "Direct experimentation match." },
+  });
+  await seedJob({
+    sourceId: "feedback_other_family",
+    title: "AI Product Manager",
+    roleFamilyId: "ai_product_platform",
+    disposition: "pass",
+    details: { feedbackReasons: ["wrong_function"], feedbackNote: "Different family." },
+  });
+
+  const examples = await repository.listFeedbackExamples("analytics_leadership", 12);
+  assert.deepEqual(examples, [{
+    title: matching.title,
+    company: matching.company,
+    disposition: "apply",
+    reasons: ["other"],
+    note: "Direct experimentation match.",
+  }]);
+
+  const dataset = await repository.getEvaluationAuditDataset({
+    sampleSize: 20,
+    seed: "narrow-audit-dataset",
+    promptVersion: workflow.PROMPT_VERSION,
+    frameworkVersion: evaluationFramework.EVALUATION_FRAMEWORK_VERSION,
+  });
+  assert.equal(dataset.population, null);
+  assert.equal(dataset.jobs.length, 2);
+});
+
 test("evaluation audit detects stale, contradictory, ungrounded, and biased output", () => {
   const job = auditReadyJob();
   job.status = "passed";

@@ -794,6 +794,130 @@ export async function listJobs({ view = "inbox", limit = 500, offset = 0, decisi
   return rows;
 }
 
+export async function listLocalProcessingCandidates({ promptVersion = "", frameworkVersion = "", limit = 5000 } = {}) {
+  await ensureJobSearchRepository();
+  const boundedLimit = Math.max(0, Math.min(5000, Number(limit) || 5000));
+  if (!hasDatabase()) return listJobs({ view: "all", limit: boundedLimit });
+  const sql = getSql();
+  return sql`SELECT id, source_id AS "sourceId", canonical_url AS "canonicalUrl", title,
+    normalized_title AS "normalizedTitle", company, location, ''::text AS description,
+    posted_at AS "postedAt", source_provider AS "sourceProvider", source_query AS "sourceQuery",
+    content_hash AS "contentHash", role_family_id AS "roleFamilyId", status, disposition,
+    jsonb_build_object(
+      'titleClassification', details #> '{titleClassification}',
+      'triage', details #> '{triage}',
+      'triageStatus', details #> '{triageStatus}',
+      'triagePromptVersion', details #> '{triagePromptVersion}',
+      'deepEvaluation', details #> '{deepEvaluation}',
+      'deepStatus', details #> '{deepStatus}',
+      'deepPromptVersion', details #> '{deepPromptVersion}',
+      'evaluationFrameworkVersion', details #> '{evaluationFrameworkVersion}',
+      'critic', details #> '{critic}',
+      'criticStatus', details #> '{criticStatus}',
+      'criticPromptVersion', details #> '{criticPromptVersion}',
+      'outreach', details #> '{outreach}'
+    ) AS details,
+    first_seen_at AS "firstSeenAt", last_seen_at AS "lastSeenAt",
+    created_at AS "createdAt", updated_at AS "updatedAt"
+    FROM js_jobs
+    WHERE source_provider <> 'sample' AND status <> 'expired' AND (
+      details #>> '{triageStatus}' IS DISTINCT FROM 'complete'
+      OR details #>> '{triagePromptVersion}' IS DISTINCT FROM ${promptVersion}
+      OR (
+        details #>> '{triage,relevance}' IN ('relevant', 'uncertain', 'irrelevant')
+        AND (
+          details #>> '{deepStatus}' IS DISTINCT FROM 'complete'
+          OR NOT (details ? 'deepEvaluation')
+          OR details #>> '{deepPromptVersion}' IS DISTINCT FROM ${promptVersion}
+          OR details #>> '{evaluationFrameworkVersion}' IS DISTINCT FROM ${frameworkVersion}
+        )
+      )
+      OR (
+        details ? 'deepEvaluation'
+        AND details #>> '{deepPromptVersion}'=${promptVersion}
+        AND details #>> '{evaluationFrameworkVersion}'=${frameworkVersion}
+        AND (
+          details #>> '{criticStatus}' IS DISTINCT FROM 'complete'
+          OR details #>> '{criticPromptVersion}' IS DISTINCT FROM ${promptVersion}
+        )
+      )
+      OR (
+        details #>> '{deepEvaluation,verdict}'='apply'
+        AND details #>> '{critic,agrees}'='true'
+        AND details #>> '{critic,recommendedVerdict}'='apply'
+        AND COALESCE(details #> '{outreach}', 'null'::jsonb)='null'::jsonb
+      )
+    )
+    ORDER BY updated_at DESC LIMIT ${boundedLimit}`;
+}
+
+export async function getEvaluationAuditDataset({
+  sampleSize = 20,
+  seed = new Date().toISOString().slice(0, 10),
+  promptVersion = "",
+  frameworkVersion = "",
+} = {}) {
+  await ensureJobSearchRepository();
+  const boundedSize = Math.max(1, Math.min(100, Number(sampleSize) || 20));
+  if (!hasDatabase()) {
+    return { jobs: await listJobs({ view: "all", limit: 5000 }), population: null };
+  }
+  const sql = getSql();
+  const [populationRows, jobs] = await Promise.all([
+    sql`SELECT
+      COUNT(*)::int AS candidates,
+      COUNT(*) FILTER (WHERE
+        details #>> '{deepStatus}'='complete'
+        AND details #>> '{evaluationFrameworkVersion}'=${frameworkVersion}
+        AND details #>> '{criticStatus}'='complete'
+        AND details #>> '{triagePromptVersion}'=${promptVersion}
+        AND details #>> '{deepPromptVersion}'=${promptVersion}
+        AND details #>> '{criticPromptVersion}'=${promptVersion}
+      )::int AS "currentDeepAndCritic"
+      FROM js_jobs WHERE source_provider <> 'sample'`,
+    sql`SELECT id, source_id AS "sourceId", canonical_url AS "canonicalUrl", title,
+      normalized_title AS "normalizedTitle", company, location, description, posted_at AS "postedAt",
+      source_provider AS "sourceProvider", source_query AS "sourceQuery", content_hash AS "contentHash",
+      role_family_id AS "roleFamilyId", status, disposition, details, first_seen_at AS "firstSeenAt",
+      last_seen_at AS "lastSeenAt", created_at AS "createdAt", updated_at AS "updatedAt"
+      FROM js_jobs
+      WHERE source_provider <> 'sample'
+        AND details #>> '{deepStatus}'='complete'
+        AND details #>> '{evaluationFrameworkVersion}'=${frameworkVersion}
+        AND details #>> '{criticStatus}'='complete'
+        AND details #>> '{triagePromptVersion}'=${promptVersion}
+        AND details #>> '{deepPromptVersion}'=${promptVersion}
+        AND details #>> '{criticPromptVersion}'=${promptVersion}
+      ORDER BY md5(${String(seed)} || '|' || id)
+      LIMIT ${boundedSize}`,
+  ]);
+  const candidates = Number(populationRows[0]?.candidates) || 0;
+  const currentDeepAndCritic = Number(populationRows[0]?.currentDeepAndCritic) || 0;
+  return {
+    jobs,
+    population: {
+      candidates,
+      currentDeepAndCritic,
+      incompleteOrStale: Math.max(0, candidates - currentDeepAndCritic),
+    },
+  };
+}
+
+export async function listTaxonomyLabelledJobs(limit = 1000) {
+  await ensureJobSearchRepository();
+  const boundedLimit = Math.max(0, Math.min(5000, Number(limit) || 1000));
+  if (!hasDatabase()) {
+    return (await readLocal()).jobs.filter((job) => job.sourceProvider !== "sample" && job.disposition)
+      .slice(0, boundedLimit)
+      .map((job) => ({ title: job.title, disposition: job.disposition, roleFamilyId: job.roleFamilyId }));
+  }
+  const sql = getSql();
+  return sql`SELECT title, disposition, role_family_id AS "roleFamilyId"
+    FROM js_jobs
+    WHERE source_provider <> 'sample' AND disposition IS NOT NULL
+    ORDER BY updated_at DESC LIMIT ${boundedLimit}`;
+}
+
 export async function upsertDiscoveryLead(lead) {
   await ensureJobSearchRepository();
   const timestamp = nowIso();
@@ -1200,9 +1324,27 @@ export async function recordFeedback(jobId, { disposition, reasons = [], note = 
 
 export async function listFeedbackExamples(familyId, limit = 12) {
   await ensureJobSearchRepository();
-  const jobs = await listJobs({ view: "all", limit: 1000 });
-  return jobs.filter((job) => job.roleFamilyId === familyId && job.disposition).slice(0, limit)
-    .map((job) => ({ title: job.title, company: job.company, disposition: job.disposition, reasons: job.details?.feedbackReasons || [] }));
+  const boundedLimit = Math.max(0, Math.min(50, Number(limit) || 12));
+  if (!hasDatabase()) {
+    return (await readLocal()).jobs
+      .filter((job) => job.sourceProvider !== "sample" && job.roleFamilyId === familyId && job.disposition)
+      .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))
+      .slice(0, boundedLimit)
+      .map((job) => ({
+        title: job.title,
+        company: job.company,
+        disposition: job.disposition,
+        reasons: job.details?.feedbackReasons || [],
+        note: job.details?.feedbackNote || "",
+      }));
+  }
+  const sql = getSql();
+  return sql`SELECT title, company, disposition,
+    COALESCE(details #> '{feedbackReasons}', '[]'::jsonb) AS reasons,
+    COALESCE(details #>> '{feedbackNote}', '') AS note
+    FROM js_jobs
+    WHERE source_provider <> 'sample' AND role_family_id=${familyId} AND disposition IS NOT NULL
+    ORDER BY updated_at DESC LIMIT ${boundedLimit}`;
 }
 
 export async function recordProviderUsage(entry) {

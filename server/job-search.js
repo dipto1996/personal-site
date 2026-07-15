@@ -19,6 +19,7 @@ import {
 import {
   createRun,
   ensureJobSearchRepository,
+  getEvaluationAuditDataset,
   getJob,
   getRepositoryDashboard,
   getRun,
@@ -234,8 +235,29 @@ export async function getJobSearchUsage() {
 
 export async function getJobSearchEvaluationAudit({ sampleSize = 20, seed } = {}) {
   await ensureJobSearchRepository();
-  const jobs = await listJobs({ view: "all", limit: 5000 });
-  return buildEvaluationAudit(jobs, { sampleSize, seed, promptVersion: PROMPT_VERSION });
+  const auditSeed = seed || new Date().toISOString().slice(0, 10);
+  const dataset = await getEvaluationAuditDataset({
+    sampleSize,
+    seed: auditSeed,
+    promptVersion: PROMPT_VERSION,
+    frameworkVersion: EVALUATION_FRAMEWORK_VERSION,
+  });
+  const audit = buildEvaluationAudit(dataset.jobs, {
+    sampleSize,
+    seed: auditSeed,
+    promptVersion: PROMPT_VERSION,
+  });
+  if (dataset.population) {
+    audit.population = {
+      ...dataset.population,
+      auditedSample: audit.sample.length,
+      automatedAnomalies: audit.population.automatedAnomalies,
+      jobsWithAutomatedAnomalies: audit.population.jobsWithAutomatedAnomalies,
+      anomaliesByCode: audit.population.anomaliesByCode,
+      anomalyScope: "random_completed_sample",
+    };
+  }
+  return audit;
 }
 
 export async function startJobSearchFreeCloudCalibration(input = {}) {
@@ -317,7 +339,7 @@ export async function updateJobSearchFeedback(jobId, input) {
 }
 
 export async function listNegativeFeedbackJobs() {
-  return (await listJobs({ view: "passed", limit: 1000 })).map(publicJob);
+  return (await listJobs({ view: "passed", limit: 200 })).map(publicJob);
 }
 
 export async function getJobSearchTaxonomy() {
